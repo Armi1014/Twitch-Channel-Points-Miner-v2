@@ -19,11 +19,13 @@ import validators
 
 from pathlib import Path
 from secrets import choice, token_hex
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 # from urllib.parse import quote
 # from base64 import urlsafe_b64decode
 # from datetime import datetime
 
+from dataclasses import dataclass
+from datetime import timezone
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.entities.CommunityGoal import CommunityGoal
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
@@ -44,7 +46,12 @@ from TwitchChannelPointsMiner.constants import (
     URL,
     GQLOperations,
 )
-from TwitchChannelPointsMiner.watch_streak_cache import WATCH_STREAK_CACHE_TTL_SECONDS
+from TwitchChannelPointsMiner.watch_streak_cache import (
+    MAX_STREAK_ATTEMPTS_PER_BROADCAST,
+    MIN_OFFLINE_FOR_NEW_STREAK,
+    WatchStreakSession,
+)
+from datetime import datetime
 from TwitchChannelPointsMiner.utils import (
     _millify,
     create_chunks,
@@ -57,11 +64,21 @@ JsonType = Dict[str, Any]
 STREAMER_INIT_TIMEOUT_PER_STREAMER = 5  # seconds
 STREAM_INFO_CACHE_TTL = 30  # seconds
 GQL_ERROR_LOG_TTL = 60  # seconds
+STREAK_MIN_SECONDS = 5 * 60  # Qualifying watch time before attempting a streak
+
+
+@dataclass
+class ActiveWatchStreakAttempt:
+    session_key: str
+    streamer: str
+    broadcast_id: str
+    started_at: float
 
 
 class Twitch(object):
     __slots__ = [
         "cookies_file",
+        "account_username",
         "user_agent",
         "twitch_login",
         "running",
@@ -74,12 +91,23 @@ class Twitch(object):
         "_stream_info_cache",
         "watch_streak_cache",
         "_last_gql_error_log",
+        "_drop_progress_log",
+        "watch_streak_max_parallel",
+        "max_watch_amount",
+        "_last_selection_was_streak",
+        "_last_streak_selection",
+        "max_streak_sessions",
+        "streak_watch_seconds",
+        "max_streak_attempts",
+        "_active_streak_attempts",
+        "_streak_outcomes_logged",
     ]
 
-    def __init__(self, username, user_agent, password=None):
+    def __init__(self, username, user_agent, password=None, watch_streak_max_parallel=None):
         cookies_path = os.path.join(Path().absolute(), "cookies")
         Path(cookies_path).mkdir(parents=True, exist_ok=True)
         self.cookies_file = os.path.join(cookies_path, f"{username}.pkl")
+        self.account_username = username
         self.user_agent = user_agent
         self.device_id = "".join(
             choice(string.ascii_letters + string.digits) for _ in range(32)
@@ -98,6 +126,21 @@ class Twitch(object):
         self._stream_info_cache = {}
         self.watch_streak_cache = None
         self._last_gql_error_log = {}
+        self._drop_progress_log: Dict[str, int] = {}
+        self.watch_streak_max_parallel = (
+            max(1, int(watch_streak_max_parallel))
+            if watch_streak_max_parallel is not None
+            else None
+        )
+        self.max_watch_amount = 2
+        self._last_selection_was_streak = False
+        self._last_streak_selection: set[str] = set()
+        self.max_streak_sessions = min(2, self.watch_streak_max_parallel or 2)
+        self.max_streak_attempts = MAX_STREAK_ATTEMPTS_PER_BROADCAST
+        self.streak_watch_seconds = STREAK_MIN_SECONDS
+        self._active_streak_attempts: Dict[str, ActiveWatchStreakAttempt] = {}
+        # Track which sessions we've already logged a terminal outcome for
+        self._streak_outcomes_logged: set[str] = set()
 
     def login(self):
         if not os.path.isfile(self.cookies_file):
@@ -307,11 +350,34 @@ class Twitch(object):
         has_next = True
         last_cursor = ""
         follows = []
+        timeouts_in_a_row = 0
         while has_next is True:
             json_data["variables"]["cursor"] = last_cursor
-            json_response = self.post_gql_request(json_data)
-            if self._log_gql_errors(json_data.get("operationName"), json_response):
-                return follows
+            while True:
+                json_response = self.post_gql_request(json_data)
+                is_timeout = self._has_service_timeout(json_response)
+                if self._log_gql_errors(json_data.get("operationName"), json_response):
+                    if is_timeout:
+                        timeouts_in_a_row += 1
+                        logger.debug(
+                            "[follows] ChannelFollows service timeout (attempt %d)",
+                            timeouts_in_a_row,
+                        )
+                        if timeouts_in_a_row == 2:
+                            logger.info(
+                                "[follows] ChannelFollows got %d service timeouts, retrying...",
+                                timeouts_in_a_row,
+                            )
+                        time.sleep(min(3, 0.5 * timeouts_in_a_row + 0.5))
+                        continue
+                    return follows
+                break
+            if timeouts_in_a_row > 1:
+                logger.debug(
+                    "[follows] ChannelFollows recovered after %d service timeouts",
+                    timeouts_in_a_row,
+                )
+            timeouts_in_a_row = 0
             follows_response = (
                 json_response.get("data", {})
                 .get("user", {})
@@ -390,18 +456,22 @@ class Twitch(object):
         if errors in [[], None]:
             return False
         messages = []
+        has_service_timeout = False
         for error in errors:
             if isinstance(error, dict):
-                messages.append(error.get("message", str(error)))
+                message = error.get("message", str(error))
             else:
-                messages.append(str(error))
+                message = str(error)
+            messages.append(message)
+            if isinstance(message, str) and "service timeout" in message.lower():
+                has_service_timeout = True
         message = "; ".join(messages) if messages else "Unknown GQL error"
-        if (
-            operation_name == "VideoPlayerStreamInfoOverlayChannel"
-            and "service timeout" in message.lower()
-        ):
+        if has_service_timeout and operation_name in [
+            "VideoPlayerStreamInfoOverlayChannel",
+            "ChannelFollows",
+        ]:
             logger.debug(
-                "GQL operation %s returned errors (suppressed): %s",
+                "GQL operation %s returned service timeout (suppressed): %s",
                 operation_name,
                 message,
             )
@@ -425,6 +495,65 @@ class Twitch(object):
                 "Error with GQLOperations (%s): %s", operation_name, error_message
             )
             self._last_gql_error_log[key] = now
+
+    def _has_service_timeout(self, response):
+        if not isinstance(response, dict):
+            return False
+        errors = response.get("errors") or []
+        for error in errors:
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            if isinstance(message, str) and "service timeout" in message.lower():
+                return True
+        return False
+
+    def _render_drop_progress_bar(self, percent: int) -> str:
+        percent = max(0, min(100, percent))
+        length = 20
+        filled = int((percent * length) / 100)
+        return f"[{'█' * filled}{'░' * (length - filled)}]"
+
+    def _log_drop_progress(self, streamer, drop, drops_logging_enabled: bool):
+        if not drops_logging_enabled:
+            return
+        drop_id = getattr(drop, "drop_instance_id", None) or getattr(drop, "id", None)
+        if drop_id is None or drop.is_claimed or drop.minutes_required <= 0:
+            return
+
+        progress_ratio = drop.current_minutes_watched / drop.minutes_required
+        progress_ratio = max(0.0, min(1.0, progress_ratio))
+        percent = int(progress_ratio * 100)
+
+        # Always emit an initial log for a new drop progress entry
+        last_logged = self._drop_progress_log.get(drop_id)
+        if last_logged is None:
+            logger.info(
+                "[DROPS] %s - \"%s\" %s/%s min (%d%%)",
+                streamer.username,
+                drop.name,
+                drop.current_minutes_watched,
+                drop.minutes_required,
+                percent,
+            )
+            self._drop_progress_log[drop_id] = max(0, percent)
+            if percent >= 100:
+                self._drop_progress_log.pop(drop_id, None)
+            return
+
+        if percent >= 100:
+            logger.info(
+                f"[DROPS] {streamer.username} - \"{drop.name}\" {drop.minutes_required}/{drop.minutes_required} min (100%)"
+            )
+            self._drop_progress_log.pop(drop_id, None)
+            return
+
+        if percent < last_logged + 10 and percent != 100:
+            return
+
+        current_minutes = min(drop.current_minutes_watched, drop.minutes_required)
+        logger.info(
+            f"[DROPS] {streamer.username} - \"{drop.name}\" {current_minutes}/{drop.minutes_required} min ({percent}%)"
+        )
+        self._drop_progress_log[drop_id] = percent
 
     def _get_cached_stream_info(self, cache_key, now):
         cached_entry = self._stream_info_cache.get(cache_key)
@@ -546,8 +675,65 @@ class Twitch(object):
             logger.debug(f"Client version: {self.client_version}")
             return self.client_version
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error with update_client_version: {e}")
-            return self.client_version
+                logger.error(f"Error with update_client_version: {e}")
+                return self.client_version
+
+    def _drop_progress_value(self, streamer):
+        campaigns = getattr(streamer.stream, "campaigns", []) or []
+        progress_values = []
+        for campaign in campaigns:
+            for drop in getattr(campaign, "drops", []) or []:
+                if getattr(drop, "is_claimed", False) or getattr(drop, "dt_match", True) is False:
+                    continue
+                progress = getattr(drop, "percentage_progress", None)
+                if progress is None:
+                    continue
+                progress_values.append(progress)
+        if progress_values:
+            return min(progress_values)
+        return float("inf")
+
+    # Apply the configured priorities in order; each one appends to the sort key so later priorities
+    # only break ties from earlier ones (e.g., [STREAK, DROPS, ORDER] builds a tuple in that order).
+    def _priority_sort_key(self, streamers, idx, priorities, order_map, now):
+        streamer = streamers[idx]
+        effective_priorities = priorities or [Priority.ORDER]
+        key_parts = []
+        for prior in effective_priorities:
+            if prior == Priority.ORDER:
+                key_parts.append(order_map.get(idx, idx))
+            elif prior == Priority.POINTS_ASCENDING:
+                points = (
+                    streamer.channel_points
+                    if streamer.channel_points is not None
+                    else float("inf")
+                )
+                key_parts.append(points)
+            elif prior == Priority.POINTS_DESCENDING:
+                points = streamer.channel_points
+                key_parts.append(-points if points is not None else float("inf"))
+            elif prior == Priority.DROPS:
+                drop_rank = 0 if streamer.drops_condition() else 1
+                drop_progress = (
+                    self._drop_progress_value(streamer) if drop_rank == 0 else float("inf")
+                )
+                key_parts.append((drop_rank, drop_progress))
+            elif prior == Priority.SUBSCRIBED:
+                sub_rank = 0 if streamer.viewer_has_points_multiplier() else 1
+                points = (
+                    streamer.channel_points
+                    if streamer.channel_points is not None
+                    else float("inf")
+                )
+                key_parts.append((sub_rank, points))
+            elif prior == Priority.STREAK:
+                session = self._ensure_watch_streak_session(streamer, now)
+                eligible = self._session_is_eligible(session, streamer)
+                attempts = session.attempts if session is not None else float("inf")
+                key_parts.append((0 if eligible else 1, attempts))
+            else:
+                key_parts.append(0)
+        return tuple(key_parts)
 
     def _priority_candidates(self, streamers, streamers_index, prior, now):
         if prior == Priority.ORDER:
@@ -565,26 +751,24 @@ class Twitch(object):
             candidates = []
             for index in streamers_index:
                 streamer = streamers[index]
-                if (
-                    streamer.settings.watch_streak is True
-                    and streamer.stream.watch_streak_missing is True
-                    and (
-                        streamer.offline_at == 0
-                        or ((now - streamer.offline_at) // 60) > 30
-                    )
-                    and streamer.stream.minute_watched < 7
-                ):
-                    if self.watch_streak_cache is not None and self.watch_streak_cache.was_streak_claimed_recently(
-                        streamer.username, now, WATCH_STREAK_CACHE_TTL_SECONDS
-                    ):
-                        continue
-                    candidates.append(index)
+                if streamer.settings.watch_streak is not True:
+                    continue
+                session = self._ensure_watch_streak_session(streamer, now)
+                if not self._session_is_eligible(session, streamer):
+                    continue
+                candidates.append(index)
             return candidates
 
         if prior == Priority.DROPS:
-            return [
+            candidates = [
                 index for index in streamers_index if streamers[index].drops_condition()
             ]
+            order_map = {idx: pos for pos, idx in enumerate(streamers_index)}
+
+            return sorted(
+                candidates,
+                key=lambda idx: (self._drop_progress_value(streamers[idx]), order_map.get(idx, idx)),
+            )  # DROPS: prefer streams with lowest drop progress
 
         if prior == Priority.SUBSCRIBED:
             streamers_with_multiplier = [
@@ -592,31 +776,270 @@ class Twitch(object):
                 for index in streamers_index
                 if streamers[index].viewer_has_points_multiplier()
             ]
+            order_map = {idx: pos for pos, idx in enumerate(streamers_index)}
             return sorted(
                 streamers_with_multiplier,
-                key=lambda x: streamers[x].total_points_multiplier(),
-                reverse=True,
-            )
+                key=lambda idx: (
+                    streamers[idx].channel_points
+                    if streamers[idx].channel_points is not None
+                    else float("inf"),
+                    order_map.get(idx, idx),
+                ),
+            )  # SUBSCRIBED: prefer channels with lowest channel points
 
         return []
 
     def _select_streamers_to_watch(self, streamers, streamers_index, priority):
-        max_watch_amount = 2
-        streamers_watching = []
         now = time.time()
 
-        for prior in priority:
-            if len(streamers_watching) >= max_watch_amount:
-                break
-            candidates = self._priority_candidates(streamers, streamers_index, prior, now)
-            for index in candidates:
-                if index in streamers_watching:
-                    continue
-                streamers_watching.append(index)
-                if len(streamers_watching) >= max_watch_amount:
-                    break
+        if priority and priority[0] != Priority.STREAK and (
+            self._last_selection_was_streak or self._last_streak_selection
+        ):
+            self._last_selection_was_streak = False
+            self._last_streak_selection = set()
 
-        return streamers_watching[:max_watch_amount]
+        # If STREAK is the top priority, dedicate up to two streak sessions for short qualifying windows.
+        if priority and priority[0] == Priority.STREAK:
+            streak_selection = self._select_streak_streamers(streamers, streamers_index, priority, now)
+            selection_names = {streamers[i].username for i in streak_selection}
+            if selection_names != self._last_streak_selection:
+                self._last_streak_selection = selection_names
+            if streak_selection:
+                self._last_selection_was_streak = True
+                return streak_selection[: self.max_watch_amount]
+            self._last_selection_was_streak = False
+            start_index = 1
+        else:
+            start_index = 0
+
+        remaining_priorities = priority[start_index:] if priority else []
+        if not remaining_priorities:
+            remaining_priorities = [Priority.ORDER]
+
+        order_map = {idx: pos for pos, idx in enumerate(streamers_index)}
+        sorted_candidates = sorted(
+            streamers_index,
+            key=lambda idx: self._priority_sort_key(
+                streamers, idx, remaining_priorities, order_map, now
+            ),
+        )
+
+        return sorted_candidates[: self.max_watch_amount]
+
+    def _offline_gap_seconds(self, streamer) -> Optional[float]:
+        if streamer.offline_at and streamer.online_at and streamer.online_at > streamer.offline_at:
+            return streamer.online_at - streamer.offline_at
+        return None
+
+    def _resolve_broadcast_identity(self, streamer, now: float) -> tuple[str, float, bool]:
+        broadcast_id = streamer.stream.broadcast_id
+        started_at = streamer.online_at or now
+        synthetic = False
+        if broadcast_id is None:
+            synthetic = True
+            started_at = streamer.online_at or now
+            started_iso = datetime.fromtimestamp(started_at, tz=timezone.utc).isoformat()
+            broadcast_id = f"{streamer.username}:{started_iso}"
+        return broadcast_id, started_at, synthetic
+
+    def _ensure_watch_streak_session(self, streamer, now: float) -> Optional[WatchStreakSession]:
+        if self.watch_streak_cache is None:
+            return None
+        broadcast_id, started_at, synthetic = self._resolve_broadcast_identity(streamer, now)
+        offline_gap = self._offline_gap_seconds(streamer)
+        latest_session = self.watch_streak_cache.latest_session_for_streamer(
+            streamer.username, account_name=self.account_username
+        )
+
+        if synthetic and offline_gap is not None and offline_gap < MIN_OFFLINE_FOR_NEW_STREAK:
+            if latest_session:
+                broadcast_id = latest_session.broadcast_id
+                started_at = latest_session.started_at
+
+        if broadcast_id:
+            self.watch_streak_cache.record_online(
+                streamer.username,
+                broadcast_id,
+                streamer.online_at or now,
+                account_name=self.account_username,
+            )
+
+        session = self.watch_streak_cache.get_session(
+            streamer.username, broadcast_id, account_name=self.account_username
+        )
+        if session:
+            return session
+
+        if (
+            latest_session
+            and latest_session.broadcast_id == broadcast_id
+            and offline_gap is not None
+            and offline_gap < MIN_OFFLINE_FOR_NEW_STREAK
+        ):
+            return latest_session
+
+        if not self.watch_streak_cache.should_create_session(
+            streamer.username, account_name=self.account_username
+        ):
+            return None
+
+        return self.watch_streak_cache.ensure_session(
+            streamer.username,
+            broadcast_id,
+            started_at,
+            account_name=self.account_username,
+        )
+
+    def _session_is_eligible(self, session: WatchStreakSession, streamer) -> bool:
+        if session is None:
+            return False
+        if session.claimed or session.ended_at is not None:
+            return False
+        if session.attempts >= self.max_streak_attempts:
+            return False
+        if streamer.stream.watch_streak_missing is False:
+            return False
+        return True
+
+    def _log_streak_start(self, session: WatchStreakSession):
+        return
+
+    def _log_streak_claimed(self, session: WatchStreakSession):
+        return
+
+    def _log_streak_failed(self, session: WatchStreakSession):
+        return
+
+    def _cleanup_streak_attempts(self, streamers, now: float):
+        if self.watch_streak_cache is None:
+            self._active_streak_attempts = {}
+            return
+
+        remaining: dict[str, ActiveWatchStreakAttempt] = {}
+        for session_key, attempt in list(self._active_streak_attempts.items()):
+            session = self.watch_streak_cache.get_session(
+                attempt.streamer, attempt.broadcast_id, account_name=self.account_username
+            )
+            streamer_obj = next((s for s in streamers if s.username == attempt.streamer), None)
+
+            if session is None or streamer_obj is None or streamer_obj.is_online is False:
+                self.watch_streak_cache.mark_ended(
+                    attempt.streamer,
+                    attempt.broadcast_id,
+                    ended_at=now,
+                    account_name=self.account_username,
+                )
+                continue
+
+            current_broadcast_id, _, _ = self._resolve_broadcast_identity(streamer_obj, now)
+            if current_broadcast_id != attempt.broadcast_id:
+                self.watch_streak_cache.mark_ended(
+                    attempt.streamer,
+                    attempt.broadcast_id,
+                    ended_at=now,
+                    account_name=self.account_username,
+                )
+                continue
+
+            if session.claimed or streamer_obj.stream.watch_streak_missing is False:
+                session = self.watch_streak_cache.mark_claimed(
+                    attempt.streamer,
+                    broadcast_id=attempt.broadcast_id,
+                    now=now,
+                    account_name=self.account_username,
+                )
+                self._log_streak_claimed(session)
+                continue
+
+            elapsed = now - attempt.started_at
+            if elapsed < self.streak_watch_seconds:
+                remaining[session_key] = attempt
+                continue
+
+            session = self.watch_streak_cache.mark_attempt(
+                attempt.streamer,
+                attempt.broadcast_id,
+                now,
+                account_name=self.account_username,
+                max_attempts=self.max_streak_attempts,
+            )
+
+            if streamer_obj.stream.watch_streak_missing is False:
+                session = self.watch_streak_cache.mark_claimed(
+                    attempt.streamer,
+                    broadcast_id=attempt.broadcast_id,
+                    now=now,
+                    account_name=self.account_username,
+                )
+
+            if session.claimed:
+                self._log_streak_claimed(session)
+                continue
+
+            if session.attempts >= self.max_streak_attempts:
+                self.watch_streak_cache.mark_ended(
+                    attempt.streamer,
+                    attempt.broadcast_id,
+                    ended_at=now,
+                    account_name=self.account_username,
+                )
+                self._log_streak_failed(session)
+                continue
+
+            # Attempt completed but session is still eligible; release the slot for another round later.
+        self._active_streak_attempts = remaining
+
+    def _select_streak_streamers(self, streamers, streamers_index, priority, now: float):
+        self._cleanup_streak_attempts(streamers, now)
+
+        active_selection: list[int] = []
+        active_streamers = set()
+        for attempt in self._active_streak_attempts.values():
+            try:
+                idx = next(i for i in streamers_index if streamers[i].username == attempt.streamer)
+            except StopIteration:
+                continue
+            active_selection.append(idx)
+            active_streamers.add(attempt.streamer)
+
+        if len(active_selection) < self.max_streak_sessions:
+            order_map = {idx: pos for pos, idx in enumerate(streamers_index)}
+            streak_priorities = priority or [Priority.STREAK]
+            candidates = []
+            for idx in streamers_index:
+                streamer = streamers[idx]
+                session = self._ensure_watch_streak_session(streamer, now)
+                if session is None or not self._session_is_eligible(session, streamer):
+                    continue
+                candidates.append(idx)
+
+            sorted_candidates = sorted(
+                candidates,
+                key=lambda idx: self._priority_sort_key(
+                    streamers, idx, streak_priorities, order_map, now
+                ),
+            )
+            for idx in sorted_candidates:
+                if len(active_selection) >= self.max_streak_sessions:
+                    break
+                streamer = streamers[idx]
+                if streamer.username in active_streamers:
+                    continue
+                session = self._ensure_watch_streak_session(streamer, now)
+                if session is None or not self._session_is_eligible(session, streamer):
+                    continue
+                attempt = ActiveWatchStreakAttempt(
+                    session_key=session.key(),
+                    streamer=streamer.username,
+                    broadcast_id=session.broadcast_id,
+                    started_at=now,
+                )
+                self._active_streak_attempts[session.key()] = attempt
+                active_streamers.add(streamer.username)
+                active_selection.append(idx)
+                self._log_streak_start(session)
+
+        return active_selection[: self.max_streak_sessions]
 
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
         while self.running:
@@ -638,12 +1061,15 @@ class Twitch(object):
                         self.check_streamer_online(streamers[index])
 
                 """
-                Twitch has a limit - you can't watch more than 2 channels at one time.
-                We'll take the first two streamers from the final list as they have the highest priority.
+                Normally we respect the 2-stream limit, but if any watch-streaks are pending
+                we temporarily fan out (optionally capped by watch_streak_max_parallel)
+                so each live streamer gets a shot.
                 """
                 streamers_watching = self._select_streamers_to_watch(
                     streamers, streamers_index, priority
                 )
+
+                drops_logging_enabled = Priority.DROPS in priority
 
                 for index in streamers_watching:
                     # next_iteration = time.time() + 60 / len(streamers_watching)
@@ -768,51 +1194,7 @@ class Twitch(object):
 
                             for campaign in streamers[index].stream.campaigns:
                                 for drop in campaign.drops:
-                                    # We could add .has_preconditions_met condition inside is_printable
-                                    if (
-                                        drop.has_preconditions_met is not False
-                                        and drop.is_printable is True
-                                    ):
-                                        drop_messages = [
-                                            f"{streamers[index]} is streaming {streamers[index].stream}",
-                                            f"Campaign: {campaign}",
-                                            f"Drop: {drop}",
-                                            f"{drop.progress_bar()}",
-                                        ]
-                                        for single_line in drop_messages:
-                                            logger.info(
-                                                single_line,
-                                                extra={
-                                                    "event": Events.DROP_STATUS,
-                                                    "skip_telegram": True,
-                                                    "skip_discord": True,
-                                                    "skip_webhook": True,
-                                                    "skip_matrix": True,
-                                                    "skip_gotify": True
-                                                },
-                                            )
-
-                                        if Settings.logger.telegram is not None:
-                                            Settings.logger.telegram.send(
-                                                "\n".join(drop_messages),
-                                                Events.DROP_STATUS,
-                                            )
-
-                                        if Settings.logger.discord is not None:
-                                            Settings.logger.discord.send(
-                                                "\n".join(drop_messages),
-                                                Events.DROP_STATUS,
-                                            )
-                                        if Settings.logger.webhook is not None:
-                                            Settings.logger.webhook.send(
-                                                "\n".join(drop_messages),
-                                                Events.DROP_STATUS,
-                                            )
-                                        if Settings.logger.gotify is not None:
-                                            Settings.logger.gotify.send(
-                                                "\n".join(drop_messages),
-                                                Events.DROP_STATUS,
-                                            )
+                                    self._log_drop_progress(streamers[index], drop, drops_logging_enabled)
 
                     except requests.exceptions.ConnectionError as e:
                         logger.error(
@@ -860,6 +1242,22 @@ class Twitch(object):
 
         streamer.channel_points = community_points.get("balance", streamer.channel_points)
         streamer.activeMultipliers = community_points.get("activeMultipliers")
+        streamer.subscription_tier = None
+        try:
+            self_info = channel.get("self", {}) if isinstance(channel, dict) else {}
+            sub_benefit = (
+                self_info.get("subscriptionBenefit")
+                if isinstance(self_info, dict)
+                else None
+            )
+            if isinstance(sub_benefit, dict):
+                tier = sub_benefit.get("tier")
+                if tier is not None:
+                    streamer.subscription_tier = tier
+            if streamer.subscription_tier is None and streamer.viewer_has_points_multiplier():
+                streamer.subscription_tier = 1
+        except Exception:
+            pass
 
         if streamer.settings.community_goals is True:
             goals = channel.get("communityPointsSettings", {}).get("goals", [])
@@ -1120,26 +1518,28 @@ class Twitch(object):
 
     def __sync_campaigns(self, campaigns):
         # We need the inventory only for get the real updated value/progress
-        # Get data from inventory and sync current status with streamers.campaigns
+        logger.debug("Fetching drop inventory for sync")
         inventory = self.__get_inventory()
-        if inventory not in [None, {}] and inventory["dropCampaignsInProgress"] not in [
-            None,
-            {},
-        ]:
-            # Iterate all campaigns from dashboard (only active, with working drops)
-            # In this array we have also the campaigns never started from us (not in nventory)
-            for i in range(len(campaigns)):
-                campaigns[i].clear_drops()  # Remove all the claimed drops
-                # Iterate all campaigns currently in progress from out inventory
-                for progress in inventory["dropCampaignsInProgress"]:
-                    if progress["id"] == campaigns[i].id:
-                        campaigns[i].in_inventory = True
-                        campaigns[i].sync_drops(
-                            progress["timeBasedDrops"], self.claim_drop
-                        )
-                        # Remove all the claimed drops
-                        campaigns[i].clear_drops()
-                        break
+        if not isinstance(inventory, dict):
+            return campaigns
+        campaigns_in_progress = inventory.get("dropCampaignsInProgress") or []
+        if not campaigns_in_progress:
+            return campaigns
+
+        for i in range(len(campaigns)):
+            for progress in campaigns_in_progress:
+                if progress.get("id") != campaigns[i].id:
+                    continue
+                campaigns[i].in_inventory = True
+                time_based = progress.get("timeBasedDrops") or []
+                campaigns[i].sync_drops(time_based, self.claim_drop)
+                logger.debug(
+                    "Updated drop progress for campaign %s with %d timeBasedDrops",
+                    campaigns[i].id,
+                    len(time_based),
+                )
+                campaigns[i].clear_drops()  # Clean up claimed/expired after sync
+                break
         return campaigns
 
     def claim_drop(self, drop):
@@ -1173,7 +1573,12 @@ class Twitch(object):
                             time.sleep(random.uniform(5, 10))
 
     def __streamers_require_campaign_sync(self, streamers):
-        return any(streamer.drops_condition() for streamer in streamers)
+        # Run drop sync whenever at least one online streamer has drops enabled,
+        # even if campaign details are not yet loaded (avoid chicken-and-egg).
+        return any(
+            streamer.settings.claim_drops is True and streamer.is_online is True
+            for streamer in streamers
+        )
 
     def sync_campaigns(self, streamers, chunk_size=3):
         campaigns_update = 0
@@ -1340,7 +1745,7 @@ def _self_check_priority_selection():
     from TwitchChannelPointsMiner.watch_streak_cache import WatchStreakCache
 
     twitch = Twitch("self-check", "ua")
-    twitch.watch_streak_cache = WatchStreakCache()
+    twitch.watch_streak_cache = WatchStreakCache(default_account_name="self-check")
     priorities = [Priority.STREAK, Priority.SUBSCRIBED, Priority.POINTS_ASCENDING]
 
     def make_streamer(name, points, subscribed=False, watch_streak=True):

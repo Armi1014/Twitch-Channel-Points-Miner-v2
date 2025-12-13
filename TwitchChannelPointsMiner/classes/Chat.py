@@ -45,6 +45,12 @@ class ClientIRC(SingleServerIRCBot):
                 logger.error(
                     f"Exception raised: {e}. Thread is active: {self.__active}"
                 )
+                # Stop the loop on socket/select errors to avoid tight log spam
+                self.__active = False
+                try:
+                    self.connection.disconnect("Disconnecting after error")
+                except Exception:
+                    pass
 
     def die(self, msg="Bye, cruel world!"):
         self.connection.disconnect(msg)

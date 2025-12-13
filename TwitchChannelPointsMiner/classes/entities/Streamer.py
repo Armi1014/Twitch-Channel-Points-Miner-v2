@@ -82,6 +82,7 @@ class Streamer(object):
         "minute_watched_requests",
         "viewer_is_mod",
         "activeMultipliers",
+        "subscription_tier",
         "irc_chat",
         "stream",
         "raid",
@@ -90,6 +91,7 @@ class Streamer(object):
         "mutex",
         "watch_streak_cache",
         "watch_streak_cache_path",
+        "watch_streak_account",
     ]
 
     def __init__(self, username, settings=None):
@@ -105,6 +107,7 @@ class Streamer(object):
         self.minute_watched_requests = None
         self.viewer_is_mod = False
         self.activeMultipliers = None
+        self.subscription_tier = None
         self.irc_chat = None
 
         self.stream = Stream()
@@ -117,6 +120,7 @@ class Streamer(object):
         self.mutex = Lock()
         self.watch_streak_cache = None
         self.watch_streak_cache_path = ""
+        self.watch_streak_account = None
 
     def __repr__(self):
         return f"Streamer(username={self.username}, channel_id={self.channel_id}, channel_points={_millify(self.channel_points)})"
@@ -129,9 +133,30 @@ class Streamer(object):
         )
 
     def set_offline(self):
+        now = time.time()
         if self.is_online is True:
-            self.offline_at = time.time()
+            self.offline_at = now
             self.is_online = False
+        elif self.offline_at == 0:
+            self.offline_at = now
+
+        if self.watch_streak_cache is not None and self.watch_streak_account:
+            if self.offline_at:
+                self.watch_streak_cache.record_offline(
+                    self.username,
+                    self.offline_at,
+                    account_name=self.watch_streak_account,
+                )
+            for session in self.watch_streak_cache.pending_sessions(
+                account_name=self.watch_streak_account
+            ):
+                if session.streamer_login == self.username:
+                    self.watch_streak_cache.mark_ended(
+                        self.username,
+                        session.broadcast_id,
+                        ended_at=self.offline_at,
+                        account_name=self.watch_streak_account,
+                    )
 
         self.toggle_chat()
 
@@ -148,6 +173,17 @@ class Streamer(object):
             self.online_at = time.time()
             self.is_online = True
             self.stream.init_watch_streak()
+            if (
+                self.watch_streak_cache is not None
+                and self.watch_streak_account
+                and self.stream.broadcast_id
+            ):
+                self.watch_streak_cache.record_online(
+                    self.username,
+                    self.stream.broadcast_id,
+                    self.online_at,
+                    account_name=self.watch_streak_account,
+                )
 
         self.toggle_chat()
 
@@ -177,8 +213,11 @@ class Streamer(object):
         if reason_code is not None and "WATCH_STREAK" in str(reason_code):
             self.stream.watch_streak_missing = False
             if self.watch_streak_cache is not None:
-                self.watch_streak_cache.mark_streak_claimed(
-                    self.username, time.time()
+                self.watch_streak_cache.mark_claimed(
+                    self.username,
+                    broadcast_id=self.stream.broadcast_id,
+                    now=time.time(),
+                    account_name=self.watch_streak_account,
                 )
                 if self.watch_streak_cache_path:
                     self.watch_streak_cache.save_to_disk_if_dirty(
@@ -192,8 +231,8 @@ class Streamer(object):
         return (
             self.settings.claim_drops is True
             and self.is_online is True
-            # and self.stream.drops_tags is True
             and self.stream.campaigns_ids != []
+            and self.has_farmable_drops()
         )
 
     def viewer_has_points_multiplier(self):
@@ -210,6 +249,23 @@ class Streamer(object):
             if self.activeMultipliers is not None
             else 0
         )
+
+    def has_farmable_drops(self):
+        campaigns = getattr(self.stream, "campaigns", []) or []
+        # If we have campaign ids but haven't synced details yet, assume there may be farmable drops.
+        if not campaigns and self.stream.campaigns_ids:
+            return True
+        if not campaigns:
+            return False
+        is_subscribed = self.subscription_tier is not None
+        for campaign in campaigns:
+            for drop in getattr(campaign, "drops", []) or []:
+                if drop.is_claimed or drop.dt_match is False:
+                    continue
+                if drop.requires_subscription and not is_subscribed:
+                    continue
+                return True
+        return False
 
     def get_prediction_window(self, prediction_window_seconds):
         delay_mode = self.settings.bet.delay_mode

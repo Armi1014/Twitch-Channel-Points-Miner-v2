@@ -24,10 +24,7 @@ from TwitchChannelPointsMiner.classes.Settings import FollowersOrder, Priority, 
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
 from TwitchChannelPointsMiner.logger import LoggerSettings, configure_loggers
-from TwitchChannelPointsMiner.watch_streak_cache import (
-    WATCH_STREAK_CACHE_TTL_SECONDS,
-    WatchStreakCache,
-)
+from TwitchChannelPointsMiner.watch_streak_cache import WatchStreakCache
 from TwitchChannelPointsMiner.utils import (
     _millify,
     at_least_one_value_in_settings_is,
@@ -78,6 +75,7 @@ class TwitchChannelPointsMiner:
         "queue_listener",
         "watch_streak_cache_path",
         "watch_streak_cache",
+        "watch_streak_max_parallel",
     ]
 
     def __init__(
@@ -94,6 +92,7 @@ class TwitchChannelPointsMiner:
         logger_settings: LoggerSettings = LoggerSettings(),
         # Default values for all streamers
         streamer_settings: StreamerSettings = StreamerSettings(),
+        watch_streak_max_parallel: int | None = None,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -143,12 +142,19 @@ class TwitchChannelPointsMiner:
 
         # user_agent = get_user_agent("FIREFOX")
         user_agent = get_user_agent("CHROME")
-        self.twitch = Twitch(self.username, user_agent, password)
+        self.watch_streak_max_parallel = (
+            max(1, int(watch_streak_max_parallel))
+            if watch_streak_max_parallel is not None
+            else None
+        )
+        self.twitch = Twitch(
+            self.username, user_agent, password, self.watch_streak_max_parallel
+        )
 
         self.claim_drops_startup = claim_drops_startup
         self.watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
         self.watch_streak_cache = WatchStreakCache.load_from_disk(
-            self.watch_streak_cache_path
+            self.watch_streak_cache_path, default_account_name=self.username
         )
         self.twitch.watch_streak_cache = self.watch_streak_cache
         if priority is None:
@@ -258,7 +264,7 @@ class TwitchChannelPointsMiner:
                 self.twitch.claim_all_drops_from_inventory()
 
             self.watch_streak_cache = WatchStreakCache.load_from_disk(
-                self.watch_streak_cache_path
+                self.watch_streak_cache_path, default_account_name=self.username
             )
             self.twitch.watch_streak_cache = self.watch_streak_cache
 
@@ -321,10 +327,7 @@ class TwitchChannelPointsMiner:
                     )
                 streamer.watch_streak_cache = self.watch_streak_cache
                 streamer.watch_streak_cache_path = self.watch_streak_cache_path
-                if self.watch_streak_cache.was_streak_claimed_recently(
-                    streamer.username, time.time(), WATCH_STREAK_CACHE_TTL_SECONDS
-                ):
-                    streamer.stream.watch_streak_missing = False
+                streamer.watch_streak_account = self.username
                 return streamer
 
             streamers_loaded = [None] * len(streamers_name)
@@ -368,6 +371,9 @@ class TwitchChannelPointsMiner:
                     logger.error("No valid streamers available after initialization.")
                     self.end(0, 0)
                     return
+
+            if self.watch_streak_cache is not None:
+                self.watch_streak_cache.mark_bootstrap_done()
 
             self.original_streamers = [
                 streamer.channel_points for streamer in self.streamers
