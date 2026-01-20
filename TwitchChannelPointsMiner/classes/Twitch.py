@@ -373,7 +373,12 @@ class Twitch(object):
             logger.error(f"Error with update_client_version: {e}")
             return self.client_version
 
-    def send_minute_watched_events(self, streamers, priority, chunk_size=3):
+    def send_minute_watched_events(
+        self, streamers, priority, favorite_streamers=None, chunk_size=3
+    ):
+        favorite_streamers = (
+            favorite_streamers if isinstance(favorite_streamers, list) else []
+        )
         while self.running:
             try:
                 streamers_index = [
@@ -398,17 +403,44 @@ class Twitch(object):
                 """
                 max_watch_amount = 2
                 streamers_watching = set()
+                streak_streamers = []
 
                 def remaining_watch_amount():
                     return max_watch_amount - len(streamers_watching)
 
-                for prior in priority:
+                favorite_streamers_map = {}
+                if favorite_streamers and Priority.FAVORITE in priority:
+                    for index in streamers_index:
+                        username = streamers[index].username.lower()
+                        if username not in favorite_streamers_map:
+                            favorite_streamers_map[username] = index
+
+                priority_order = priority
+                if Priority.FAVORITE in priority:
+                    priority_order = [
+                        prior for prior in priority if prior != Priority.FAVORITE
+                    ]
+                    if Priority.STREAK in priority_order:
+                        streak_index = priority_order.index(Priority.STREAK)
+                        priority_order.insert(streak_index + 1, Priority.FAVORITE)
+                    else:
+                        priority_order.insert(0, Priority.FAVORITE)
+
+                for prior in priority_order:
                     if remaining_watch_amount() <= 0:
                         break
 
                     if prior == Priority.ORDER:
                         # Get the first 2 items, they are already in order
                         streamers_watching.update(streamers_index[:remaining_watch_amount()])
+
+                    elif prior == Priority.FAVORITE:
+                        for favorite in favorite_streamers:
+                            index = favorite_streamers_map.get(favorite)
+                            if index is not None:
+                                streamers_watching.add(index)
+                                if remaining_watch_amount() <= 0:
+                                    break
 
                     elif prior in [Priority.POINTS_ASCENDING, Priority.POINTS_DESCENDING]:
                         items = [
@@ -451,6 +483,8 @@ class Twitch(object):
                                 and streamers[index].stream.minute_watched < 7
                             ):
                                 streamers_watching.add(index)
+                                if index not in streak_streamers:
+                                    streak_streamers.append(index)
                                 if remaining_watch_amount() <= 0:
                                     break
 
@@ -475,7 +509,29 @@ class Twitch(object):
                         )
                         streamers_watching.update(streamers_with_multiplier[:remaining_watch_amount()])
 
-                streamers_watching = list(streamers_watching)[:max_watch_amount]
+                streamers_watching_list = list(streamers_watching)
+                if favorite_streamers and Priority.FAVORITE in priority:
+                    ordered_streamers = []
+                    for index in streak_streamers:
+                        if (
+                            index in streamers_watching
+                            and index not in ordered_streamers
+                        ):
+                            ordered_streamers.append(index)
+                    for favorite in favorite_streamers:
+                        index = favorite_streamers_map.get(favorite)
+                        if (
+                            index is not None
+                            and index in streamers_watching
+                            and index not in ordered_streamers
+                        ):
+                            ordered_streamers.append(index)
+                    for index in streamers_watching_list:
+                        if index not in ordered_streamers:
+                            ordered_streamers.append(index)
+                    streamers_watching = ordered_streamers[:max_watch_amount]
+                else:
+                    streamers_watching = streamers_watching_list[:max_watch_amount]
 
                 watch_attempts_start_time = time.time()
 

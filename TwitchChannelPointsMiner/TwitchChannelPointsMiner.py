@@ -58,6 +58,7 @@ class TwitchChannelPointsMiner:
         "disable_ssl_cert_verification",
         "disable_at_in_nickname",
         "priority",
+        "favorite_streamers",
         "streamers",
         "events_predictions",
         "minute_watcher_thread",
@@ -85,6 +86,7 @@ class TwitchChannelPointsMiner:
         logger_settings: LoggerSettings = LoggerSettings(),
         # Default values for all streamers
         streamer_settings: StreamerSettings = StreamerSettings(),
+        favorite_streamers: list = None,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -141,6 +143,20 @@ class TwitchChannelPointsMiner:
 
         self.claim_drops_startup = claim_drops_startup
         self.priority = priority if isinstance(priority, list) else [priority]
+        favorite_streamers = (
+            favorite_streamers if isinstance(favorite_streamers, list) else []
+        )
+        normalized_favorites = []
+        seen_favorites = set()
+        for streamer in favorite_streamers:
+            if streamer is None:
+                continue
+            favorite = str(streamer).strip().lower()
+            if favorite and favorite not in seen_favorites:
+                normalized_favorites.append(favorite)
+                seen_favorites.add(favorite)
+        self.favorite_streamers = normalized_favorites
+        Settings.favorite_streamers = self.favorite_streamers
 
         self.streamers: list[Streamer] = []
         self.events_predictions = {}
@@ -329,7 +345,7 @@ class TwitchChannelPointsMiner:
 
             self.minute_watcher_thread = threading.Thread(
                 target=self.twitch.send_minute_watched_events,
-                args=(self.streamers, self.priority),
+                args=(self.streamers, self.priority, self.favorite_streamers),
             )
             self.minute_watcher_thread.name = "Minute watcher"
             self.minute_watcher_thread.start()

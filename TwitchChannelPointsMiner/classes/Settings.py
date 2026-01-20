@@ -4,6 +4,7 @@ from enum import Enum, auto
 class Priority(Enum):
     ORDER = auto()
     STREAK = auto()
+    FAVORITE = auto()
     DROPS = auto()
     SUBSCRIBED = auto()
     POINTS_ASCENDING = auto()
@@ -21,7 +22,8 @@ class FollowersOrder(Enum):
 # Empty object shared between class
 class Settings(object):
     __slots__ = ["logger", "streamer_settings",
-                 "enable_analytics", "disable_ssl_cert_verification", "disable_at_in_nickname"]
+                 "enable_analytics", "disable_ssl_cert_verification",
+                 "disable_at_in_nickname", "favorite_streamers"]
 
 
 class Events(Enum):

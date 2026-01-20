@@ -208,9 +208,11 @@ twitch_miner = TwitchChannelPointsMiner(
     claim_drops_startup=False,                  # If you want to auto claim all drops from Twitch inventory on the startup
     priority=[                                  # Custom priority in this case for example:
         Priority.STREAK,                        # - We want first of all to catch all watch streak from all streamers
+        Priority.FAVORITE,                      # - Then prioritize favorite streamers (in order)
         Priority.DROPS,                         # - When we don't have anymore watch streak to catch, wait until all drops are collected over the streamers
         Priority.ORDER                          # - When we have all of the drops claimed and no watch-streak available, use the order priority (POINTS_ASCENDING, POINTS_DESCENDING)
     ],
+    favorite_streamers=["TOP_FAVORITE_STREAMER", "favorite2", "favorite3"],
     enable_analytics=False,			# Disables Analytics if False. Disabling it significantly reduces memory consumption
     disable_ssl_cert_verification=False,	# Set to True at your own risk and only to fix SSL: CERTIFICATE_VERIFY_FAILED error
     disable_at_in_nickname=False,               # Set to True if you want to check for your nickname mentions in the chat even without @ sign
@@ -435,6 +437,7 @@ Most of the settings are self-explained and are commented on in the example.
 You can watch only two streamers per time. With `priority` settings, you can select which streamers watch by use priority. You can use an array of priority or single item. I suggest using at least one priority from `ORDER`, `POINTS_ASCENDING`, `POINTS_DESCENDING` because, for example, If you set only `STREAK` after catch all watch streak, the script will stop to watch streamers.
 Available values are the following:
  - `STREAK` - Catch the watch streak from all streamers
+ - `FAVORITE` - Prioritize streamers listed in `favorite_streamers` (in order)
  - `DROPS` - Claim all drops from streamers with drops tags enabled
  - `SUBSCRIBED` - Prioritize streamers you're subscribed to (higher subscription tiers are mined first)
  - `ORDER` - Following the order of the list
