@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
@@ -62,6 +63,7 @@ class TwitchChannelPointsMiner:
         "persist_watch_streak_state",
         "watch_streak_state_path",
         "watch_streak_state_ttl_hours",
+        "startup_parallelism",
         "streamers",
         "events_predictions",
         "minute_watcher_thread",
@@ -93,6 +95,7 @@ class TwitchChannelPointsMiner:
         persist_watch_streak_state: bool = False,
         watch_streak_state_path: str = "watch_streak_state.json",
         watch_streak_state_ttl_hours: int = 72,
+        startup_parallelism: int = 1,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -180,6 +183,13 @@ class TwitchChannelPointsMiner:
         Settings.persist_watch_streak_state = self.persist_watch_streak_state
         Settings.watch_streak_state_path = self.watch_streak_state_path
         Settings.watch_streak_state_ttl_hours = self.watch_streak_state_ttl_hours
+        self.startup_parallelism = (
+            startup_parallelism
+            if isinstance(startup_parallelism, int)
+            else 1
+        )
+        if self.startup_parallelism < 1:
+            self.startup_parallelism = 1
 
         self.streamers: list[Streamer] = []
         self.events_predictions = {}
@@ -298,50 +308,134 @@ class TwitchChannelPointsMiner:
                 f"Loading data for {len(streamers_name)} streamers. Please wait...",
                 extra={"emoji": ":nerd_face:"},
             )
-            for username in streamers_name:
-                if username in streamers_name:
-                    time.sleep(random.uniform(0.3, 0.7))
-                    try:
-                        streamer = (
-                            streamers_dict[username]
-                            if isinstance(streamers_dict[username], Streamer) is True
-                            else Streamer(username)
+            startup_init_start = time.time()
+            startup_parallelism = self.startup_parallelism
+            effective_parallelism = startup_parallelism
+            use_parallel_init = startup_parallelism > 1 and len(streamers_name) > 1
+
+            def init_streamer(username):
+                time.sleep(random.uniform(0.3, 0.7))
+                try:
+                    streamer = (
+                        streamers_dict[username]
+                        if isinstance(streamers_dict[username], Streamer) is True
+                        else Streamer(username)
+                    )
+                    streamer.channel_id = self.twitch.get_channel_id(username)
+                    streamer.settings = set_default_settings(
+                        streamer.settings, Settings.streamer_settings
+                    )
+                    streamer.settings.bet = set_default_settings(
+                        streamer.settings.bet, Settings.streamer_settings.bet
+                    )
+                    if streamer.settings.chat != ChatPresence.NEVER:
+                        streamer.irc_chat = ThreadChat(
+                            self.username,
+                            self.twitch.twitch_login.get_auth_token(),
+                            streamer.username,
                         )
-                        streamer.channel_id = self.twitch.get_channel_id(username)
-                        streamer.settings = set_default_settings(
-                            streamer.settings, Settings.streamer_settings
-                        )
-                        streamer.settings.bet = set_default_settings(
-                            streamer.settings.bet, Settings.streamer_settings.bet
-                        )
-                        if streamer.settings.chat != ChatPresence.NEVER:
-                            streamer.irc_chat = ThreadChat(
-                                self.username,
-                                self.twitch.twitch_login.get_auth_token(),
-                                streamer.username,
+                    return ("ok", streamer)
+                except StreamerDoesNotExistException:
+                    return ("missing", username)
+
+            def init_streamers_sequential():
+                for username in streamers_name:
+                    if username in streamers_name:
+                        status, payload = init_streamer(username)
+                        if status == "ok":
+                            self.streamers.append(payload)
+                        else:
+                            logger.info(
+                                f"Streamer {payload} does not exist",
+                                extra={"emoji": ":cry:"},
                             )
-                        self.streamers.append(streamer)
-                    except StreamerDoesNotExistException:
-                        logger.info(
-                            f"Streamer {username} does not exist",
-                            extra={"emoji": ":cry:"},
-                        )
+
+            if use_parallel_init:
+                try:
+                    with ThreadPoolExecutor(
+                        max_workers=startup_parallelism
+                    ) as executor:
+                        futures = [
+                            executor.submit(init_streamer, username)
+                            for username in streamers_name
+                        ]
+                        for username, future in zip(streamers_name, futures):
+                            status, payload = future.result()
+                            if status == "ok":
+                                self.streamers.append(payload)
+                            else:
+                                logger.info(
+                                    f"Streamer {payload} does not exist",
+                                    extra={"emoji": ":cry:"},
+                                )
+                except Exception:
+                    logger.warning(
+                        "Parallel startup init failed, falling back to sequential.",
+                        exc_info=True,
+                    )
+                    self.streamers = []
+                    effective_parallelism = 1
+                    use_parallel_init = False
+                    init_streamers_sequential()
+            else:
+                effective_parallelism = 1
+                init_streamers_sequential()
 
             # Populate the streamers with default values.
             # 1. Load channel points and auto-claim bonus
             # 2. Check if streamers are online
             # 3. DEACTIVATED: Check if the user is a moderator. (was used before the 5th of April 2021 to deactivate predictions)
-            for streamer in self.streamers:
+            def populate_streamer(streamer):
                 time.sleep(random.uniform(0.3, 0.7))
                 try:
                     self.twitch.load_channel_points_context(streamer)
                     self.twitch.check_streamer_online(streamer)
                     # self.twitch.viewer_is_mod(streamer)
                 except StreamerDoesNotExistException:
-                    logger.info(
-                        f"Streamer {streamer.username} does not exist",
-                        extra={"emoji": ":cry:"},
+                    return streamer
+                return None
+
+            def populate_streamers_sequential():
+                for streamer in self.streamers:
+                    result = populate_streamer(streamer)
+                    if result is not None:
+                        logger.info(
+                            f"Streamer {result.username} does not exist",
+                            extra={"emoji": ":cry:"},
+                        )
+
+            if use_parallel_init and len(self.streamers) > 1:
+                try:
+                    with ThreadPoolExecutor(
+                        max_workers=startup_parallelism
+                    ) as executor:
+                        futures = [
+                            executor.submit(populate_streamer, streamer)
+                            for streamer in self.streamers
+                        ]
+                        for streamer, future in zip(self.streamers, futures):
+                            result = future.result()
+                            if result is not None:
+                                logger.info(
+                                    f"Streamer {result.username} does not exist",
+                                    extra={"emoji": ":cry:"},
+                                )
+                except Exception:
+                    logger.warning(
+                        "Parallel startup population failed, falling back to sequential.",
+                        exc_info=True,
                     )
+                    effective_parallelism = 1
+                    use_parallel_init = False
+                    populate_streamers_sequential()
+            else:
+                populate_streamers_sequential()
+
+            startup_init_elapsed = time.time() - startup_init_start
+            logger.info(
+                f"Startup init took {startup_init_elapsed:.2f}s "
+                f"(parallelism={effective_parallelism})"
+            )
 
             self.original_streamers = [
                 streamer.channel_points for streamer in self.streamers

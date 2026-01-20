@@ -216,6 +216,7 @@ twitch_miner = TwitchChannelPointsMiner(
     persist_watch_streak_state=False,           # Save watch streak progress to disk
     watch_streak_state_path="watch_streak_state.json",
     watch_streak_state_ttl_hours=72,
+    startup_parallelism=4,                      # Parallelize startup for large streamer lists
     enable_analytics=False,			# Disables Analytics if False. Disabling it significantly reduces memory consumption
     disable_ssl_cert_verification=False,	# Set to True at your own risk and only to fix SSL: CERTIFICATE_VERIFY_FAILED error
     disable_at_in_nickname=False,               # Set to True if you want to check for your nickname mentions in the chat even without @ sign
@@ -451,6 +452,7 @@ Optional watch streak persistence settings:
  - `persist_watch_streak_state` - Save watch streak progress to a JSON file for restarts
  - `watch_streak_state_path` - Path to the JSON state file (per instance)
  - `watch_streak_state_ttl_hours` - Cleanup entries not seen for X hours
+ - `startup_parallelism` - Parallelize startup initialization (1 = disabled)
 
 You can combine all priority but keep in mind that use `ORDER` and `POINTS_ASCENDING` in the same settings doesn't make sense.
 

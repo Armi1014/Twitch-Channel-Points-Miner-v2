@@ -29,6 +29,7 @@ twitch_miner = TwitchChannelPointsMiner(
     persist_watch_streak_state=False,           # Save watch streak progress to disk
     watch_streak_state_path="watch_streak_state.json",
     watch_streak_state_ttl_hours=72,
+    startup_parallelism=4,                      # Parallelize startup for large streamer lists
     enable_analytics=False,                     # Disables Analytics if False. Disabling it significantly reduces memory consumption
     disable_ssl_cert_verification=False,        # Set to True at your own risk and only to fix SSL: CERTIFICATE_VERIFY_FAILED error
     disable_at_in_nickname=False,               # Set to True if you want to check for your nickname mentions in the chat even without @ sign
