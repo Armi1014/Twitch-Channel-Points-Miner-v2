@@ -23,7 +23,9 @@ class FollowersOrder(Enum):
 class Settings(object):
     __slots__ = ["logger", "streamer_settings",
                  "enable_analytics", "disable_ssl_cert_verification",
-                 "disable_at_in_nickname", "favorite_streamers"]
+                 "disable_at_in_nickname", "favorite_streamers",
+                 "persist_watch_streak_state", "watch_streak_state_path",
+                 "watch_streak_state_ttl_hours"]
 
 
 class Events(Enum):

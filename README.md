@@ -213,6 +213,9 @@ twitch_miner = TwitchChannelPointsMiner(
         Priority.ORDER                          # - When we have all of the drops claimed and no watch-streak available, use the order priority (POINTS_ASCENDING, POINTS_DESCENDING)
     ],
     favorite_streamers=["TOP_FAVORITE_STREAMER", "favorite2", "favorite3"],
+    persist_watch_streak_state=False,           # Save watch streak progress to disk
+    watch_streak_state_path="watch_streak_state.json",
+    watch_streak_state_ttl_hours=72,
     enable_analytics=False,			# Disables Analytics if False. Disabling it significantly reduces memory consumption
     disable_ssl_cert_verification=False,	# Set to True at your own risk and only to fix SSL: CERTIFICATE_VERIFY_FAILED error
     disable_at_in_nickname=False,               # Set to True if you want to check for your nickname mentions in the chat even without @ sign
@@ -443,6 +446,11 @@ Available values are the following:
  - `ORDER` - Following the order of the list
  - `POINTS_ASCENDING` - On top the streamers with the lowest points
  - `POINTS_DESCENDING` - On top the streamers with the highest points
+
+Optional watch streak persistence settings:
+ - `persist_watch_streak_state` - Save watch streak progress to a JSON file for restarts
+ - `watch_streak_state_path` - Path to the JSON state file (per instance)
+ - `watch_streak_state_ttl_hours` - Cleanup entries not seen for X hours
 
 You can combine all priority but keep in mind that use `ORDER` and `POINTS_ASCENDING` in the same settings doesn't make sense.
 

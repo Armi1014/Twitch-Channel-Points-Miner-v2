@@ -26,6 +26,9 @@ twitch_miner = TwitchChannelPointsMiner(
         Priority.ORDER                          # - When we have all of the drops claimed and no watch-streak available, use the order priority (POINTS_ASCENDING, POINTS_DESCENDING)
     ],
     favorite_streamers=["TOP_FAVORITE_STREAMER", "favorite2", "favorite3"],
+    persist_watch_streak_state=False,           # Save watch streak progress to disk
+    watch_streak_state_path="watch_streak_state.json",
+    watch_streak_state_ttl_hours=72,
     enable_analytics=False,                     # Disables Analytics if False. Disabling it significantly reduces memory consumption
     disable_ssl_cert_verification=False,        # Set to True at your own risk and only to fix SSL: CERTIFICATE_VERIFY_FAILED error
     disable_at_in_nickname=False,               # Set to True if you want to check for your nickname mentions in the chat even without @ sign

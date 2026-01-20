@@ -5,6 +5,7 @@
 
 
 import copy
+import json
 import logging
 import os
 import random
@@ -64,9 +65,24 @@ class Twitch(object):
         "client_session",
         "client_version",
         "twilight_build_id_pattern",
+        "persist_watch_streak_state",
+        "watch_streak_state_path",
+        "watch_streak_state_ttl_hours",
+        "watch_streak_state",
+        "watch_streak_state_dirty",
+        "watch_streak_state_last_saved_ts",
+        "watch_streak_state_last_cleanup_ts",
     ]
 
-    def __init__(self, username, user_agent, password=None):
+    def __init__(
+        self,
+        username,
+        user_agent,
+        password=None,
+        persist_watch_streak_state=False,
+        watch_streak_state_path="watch_streak_state.json",
+        watch_streak_state_ttl_hours=72,
+    ):
         cookies_path = os.path.join(Path().absolute(), "cookies")
         Path(cookies_path).mkdir(parents=True, exist_ok=True)
         self.cookies_file = os.path.join(cookies_path, f"{username}.pkl")
@@ -85,6 +101,19 @@ class Twitch(object):
         self.twilight_build_id_pattern = re.compile(
             r'window\.__twilightBuildID\s*=\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
         )
+        self.persist_watch_streak_state = persist_watch_streak_state is True
+        self.watch_streak_state_path = (
+            watch_streak_state_path
+            if isinstance(watch_streak_state_path, str) and watch_streak_state_path
+            else "watch_streak_state.json"
+        )
+        self.watch_streak_state_ttl_hours = watch_streak_state_ttl_hours
+        self.watch_streak_state = {}
+        self.watch_streak_state_dirty = False
+        self.watch_streak_state_last_saved_ts = 0
+        self.watch_streak_state_last_cleanup_ts = 0
+        if self.persist_watch_streak_state:
+            self._load_watch_streak_state()
 
     def login(self):
         if not os.path.isfile(self.cookies_file):
@@ -373,6 +402,156 @@ class Twitch(object):
             logger.error(f"Error with update_client_version: {e}")
             return self.client_version
 
+    def _get_live_session_id(self, streamer):
+        if streamer.stream.broadcast_id:
+            return str(streamer.stream.broadcast_id)
+        if streamer.online_at:
+            return str(int(streamer.online_at))
+        return None
+
+    def _cleanup_watch_streak_state(self, now):
+        ttl_hours = self.watch_streak_state_ttl_hours
+        if ttl_hours is None or ttl_hours <= 0:
+            return
+        ttl_seconds = ttl_hours * 3600
+        removed = False
+        for key in list(self.watch_streak_state):
+            entry = self.watch_streak_state.get(key)
+            if not isinstance(entry, dict):
+                del self.watch_streak_state[key]
+                removed = True
+                continue
+            last_seen = entry.get("last_seen_live_ts", 0) or 0
+            last_watched = entry.get("last_watched_ts", 0) or 0
+            last_ts = last_seen if last_seen > last_watched else last_watched
+            if last_ts and (now - last_ts) > ttl_seconds:
+                del self.watch_streak_state[key]
+                removed = True
+        if removed:
+            self.watch_streak_state_dirty = True
+        self.watch_streak_state_last_cleanup_ts = now
+
+    def _load_watch_streak_state(self):
+        path = Path(self.watch_streak_state_path)
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.watch_streak_state = data if isinstance(data, dict) else {}
+        except FileNotFoundError:
+            self.watch_streak_state = {}
+            return
+        except Exception as exc:
+            logger.warning(
+                f"Failed to load watch streak state from {path}: {exc}"
+            )
+            self.watch_streak_state = {}
+            return
+        now = time.time()
+        self._cleanup_watch_streak_state(now)
+
+    def _save_watch_streak_state(self, force=False):
+        if self.persist_watch_streak_state is not True:
+            return
+        if self.watch_streak_state_dirty is not True and force is not True:
+            return
+        now = time.time()
+        if force is not True and (now - self.watch_streak_state_last_saved_ts) < 30:
+            return
+        if (now - self.watch_streak_state_last_cleanup_ts) > 3600:
+            self._cleanup_watch_streak_state(now)
+        path = Path(self.watch_streak_state_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                json.dump(self.watch_streak_state, handle, separators=(",", ":"))
+            os.replace(tmp_path, path)
+            self.watch_streak_state_last_saved_ts = now
+            self.watch_streak_state_dirty = False
+        except Exception as exc:
+            logger.warning(
+                f"Failed to save watch streak state to {path}: {exc}"
+            )
+
+    def _sync_watch_streak_state(self, streamer, now):
+        if self.persist_watch_streak_state is not True:
+            return
+        if streamer.is_online is not True:
+            return
+        live_session_id = self._get_live_session_id(streamer)
+        if live_session_id is None:
+            return
+        key = streamer.username.lower()
+        entry = self.watch_streak_state.get(key)
+        if not isinstance(entry, dict):
+            entry = {}
+        changed = False
+        if entry.get("live_session_id") != live_session_id:
+            entry["live_session_id"] = live_session_id
+            entry["minutes_watched_by_miner"] = 0
+            entry["streak_claimed"] = False
+            entry["last_watched_ts"] = 0
+            changed = True
+        if "last_seen_live_ts" not in entry:
+            entry["last_seen_live_ts"] = 0
+            changed = True
+        if "minutes_watched_by_miner" not in entry:
+            entry["minutes_watched_by_miner"] = 0
+            changed = True
+        if "streak_claimed" not in entry:
+            entry["streak_claimed"] = False
+            changed = True
+        if "last_watched_ts" not in entry:
+            entry["last_watched_ts"] = 0
+            changed = True
+        if (now - entry.get("last_seen_live_ts", 0)) >= 30:
+            entry["last_seen_live_ts"] = now
+            changed = True
+        if (
+            streamer.stream.watch_streak_missing is False
+            and entry.get("streak_claimed") is False
+        ):
+            entry["streak_claimed"] = True
+            changed = True
+        if (
+            entry.get("streak_claimed") is True
+            and streamer.stream.watch_streak_missing is True
+        ):
+            streamer.stream.watch_streak_missing = False
+        saved_minutes = entry.get("minutes_watched_by_miner", 0)
+        if saved_minutes and streamer.stream.minute_watched < saved_minutes:
+            streamer.stream.minute_watched = saved_minutes
+        if changed:
+            self.watch_streak_state[key] = entry
+            self.watch_streak_state_dirty = True
+
+    def _record_watch_streak_watch(self, streamer, now):
+        if self.persist_watch_streak_state is not True:
+            return
+        live_session_id = self._get_live_session_id(streamer)
+        if live_session_id is None:
+            return
+        key = streamer.username.lower()
+        entry = self.watch_streak_state.get(key)
+        if not isinstance(entry, dict) or entry.get("live_session_id") != live_session_id:
+            entry = {
+                "live_session_id": live_session_id,
+                "last_seen_live_ts": now,
+                "last_watched_ts": now,
+                "minutes_watched_by_miner": streamer.stream.minute_watched,
+                "streak_claimed": False,
+            }
+            self.watch_streak_state[key] = entry
+            self.watch_streak_state_dirty = True
+            return
+        entry["last_watched_ts"] = now
+        entry["last_seen_live_ts"] = now
+        entry["minutes_watched_by_miner"] = streamer.stream.minute_watched
+        if streamer.stream.watch_streak_missing is False:
+            entry["streak_claimed"] = True
+        self.watch_streak_state[key] = entry
+        self.watch_streak_state_dirty = True
+
     def send_minute_watched_events(
         self, streamers, priority, favorite_streamers=None, chunk_size=3
     ):
@@ -396,6 +575,13 @@ class Twitch(object):
                         # Why this user It's currently online but the last updated was more than 10minutes ago?
                         # Please perform a manually update and check if the user it's online
                         self.check_streamer_online(streamers[index])
+                if self.persist_watch_streak_state is True:
+                    sync_time = time.time()
+                    for index in streamers_index:
+                        self._sync_watch_streak_state(
+                            streamers[index],
+                            sync_time,
+                        )
 
                 """
                 Twitch has a limit - you can't watch more than 2 channels at one time.
@@ -668,6 +854,10 @@ class Twitch(object):
                         )
                         if response.status_code == 204:
                             streamers[index].stream.update_minute_watched()
+                            self._record_watch_streak_watch(
+                                streamers[index],
+                                time.time(),
+                            )
 
                             """
                             Remember, you can only earn progress towards a time-based Drop on one participating channel at a time.  [ ! ! ! ]
@@ -736,6 +926,8 @@ class Twitch(object):
                     )
 
                 # Ensure we sleep at least 20 seconds, even if we `continue` iteration(s)
+                if self.persist_watch_streak_state is True:
+                    self._save_watch_streak_state()
                 time_remaining = 20 - (time.time() - watch_attempts_start_time)
                 if len(streamers_watching) == 0 or time_remaining > 0.01:
                     self.__chuncked_sleep(time_remaining, chunk_size=chunk_size)

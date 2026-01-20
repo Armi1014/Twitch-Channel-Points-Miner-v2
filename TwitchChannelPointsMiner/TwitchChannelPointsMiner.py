@@ -59,6 +59,9 @@ class TwitchChannelPointsMiner:
         "disable_at_in_nickname",
         "priority",
         "favorite_streamers",
+        "persist_watch_streak_state",
+        "watch_streak_state_path",
+        "watch_streak_state_ttl_hours",
         "streamers",
         "events_predictions",
         "minute_watcher_thread",
@@ -87,6 +90,9 @@ class TwitchChannelPointsMiner:
         # Default values for all streamers
         streamer_settings: StreamerSettings = StreamerSettings(),
         favorite_streamers: list = None,
+        persist_watch_streak_state: bool = False,
+        watch_streak_state_path: str = "watch_streak_state.json",
+        watch_streak_state_ttl_hours: int = 72,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -139,7 +145,14 @@ class TwitchChannelPointsMiner:
 
         # user_agent = get_user_agent("FIREFOX")
         user_agent = get_user_agent("CHROME")
-        self.twitch = Twitch(self.username, user_agent, password)
+        self.twitch = Twitch(
+            self.username,
+            user_agent,
+            password,
+            persist_watch_streak_state=persist_watch_streak_state,
+            watch_streak_state_path=watch_streak_state_path,
+            watch_streak_state_ttl_hours=watch_streak_state_ttl_hours,
+        )
 
         self.claim_drops_startup = claim_drops_startup
         self.priority = priority if isinstance(priority, list) else [priority]
@@ -157,6 +170,16 @@ class TwitchChannelPointsMiner:
                 seen_favorites.add(favorite)
         self.favorite_streamers = normalized_favorites
         Settings.favorite_streamers = self.favorite_streamers
+        self.persist_watch_streak_state = persist_watch_streak_state is True
+        self.watch_streak_state_path = (
+            watch_streak_state_path
+            if isinstance(watch_streak_state_path, str) and watch_streak_state_path
+            else "watch_streak_state.json"
+        )
+        self.watch_streak_state_ttl_hours = watch_streak_state_ttl_hours
+        Settings.persist_watch_streak_state = self.persist_watch_streak_state
+        Settings.watch_streak_state_path = self.watch_streak_state_path
+        Settings.watch_streak_state_ttl_hours = self.watch_streak_state_ttl_hours
 
         self.streamers: list[Streamer] = []
         self.events_predictions = {}
