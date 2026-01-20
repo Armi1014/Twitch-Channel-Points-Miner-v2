@@ -408,6 +408,26 @@ class Twitch(object):
                 def remaining_watch_amount():
                     return max_watch_amount - len(streamers_watching)
 
+                streak_candidates = []
+                if Priority.STREAK in priority:
+                    for index in streamers_index:
+                        if (
+                            streamers[index].settings.watch_streak is True
+                            and streamers[index].stream.watch_streak_missing is True
+                            and (
+                                streamers[index].offline_at == 0
+                                or (
+                                    (time.time() -
+                                     streamers[index].offline_at)
+                                    // 60
+                                )
+                                > 30
+                            )
+                            # fix #425
+                            and streamers[index].stream.minute_watched < 7
+                        ):
+                            streak_candidates.append(index)
+
                 favorite_streamers_map = {}
                 if favorite_streamers and Priority.FAVORITE in priority:
                     for index in streamers_index:
@@ -466,27 +486,12 @@ class Twitch(object):
                         Each stream must be at least 10 minutes long and it must have been at least 30 minutes since the last stream ended.
                         Watch at least 6m for get the +10
                         """
-                        for index in streamers_index:
-                            if (
-                                streamers[index].settings.watch_streak is True
-                                and streamers[index].stream.watch_streak_missing is True
-                                and (
-                                    streamers[index].offline_at == 0
-                                    or (
-                                        (time.time() -
-                                         streamers[index].offline_at)
-                                        // 60
-                                    )
-                                    > 30
-                                )
-                                # fix #425
-                                and streamers[index].stream.minute_watched < 7
-                            ):
-                                streamers_watching.add(index)
-                                if index not in streak_streamers:
-                                    streak_streamers.append(index)
-                                if remaining_watch_amount() <= 0:
-                                    break
+                        for index in streak_candidates:
+                            streamers_watching.add(index)
+                            if index not in streak_streamers:
+                                streak_streamers.append(index)
+                            if remaining_watch_amount() <= 0:
+                                break
 
                     elif prior == Priority.DROPS:
                         for index in streamers_index:
@@ -529,7 +534,21 @@ class Twitch(object):
                     for index in streamers_watching_list:
                         if index not in ordered_streamers:
                             ordered_streamers.append(index)
-                    streamers_watching = ordered_streamers[:max_watch_amount]
+                    if len(streak_candidates) >= 2:
+                        streamers_watching = streak_candidates[:max_watch_amount]
+                    elif len(streak_candidates) == 1:
+                        first_choice = streak_candidates[0]
+                        second_choice = None
+                        for index in ordered_streamers:
+                            if index != first_choice:
+                                second_choice = index
+                                break
+                        if second_choice is not None:
+                            streamers_watching = [first_choice, second_choice]
+                        else:
+                            streamers_watching = [first_choice]
+                    else:
+                        streamers_watching = ordered_streamers[:max_watch_amount]
                 else:
                     streamers_watching = streamers_watching_list[:max_watch_amount]
 
