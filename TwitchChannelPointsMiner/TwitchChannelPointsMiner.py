@@ -95,7 +95,7 @@ class TwitchChannelPointsMiner:
         persist_watch_streak_state: bool = False,
         watch_streak_state_path: str = "watch_streak_state.json",
         watch_streak_state_ttl_hours: int = 72,
-        startup_parallelism: int = 1,
+        startup_parallelism: int = 10,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
