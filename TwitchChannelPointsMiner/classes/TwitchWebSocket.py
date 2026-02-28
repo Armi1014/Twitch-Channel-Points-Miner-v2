@@ -55,7 +55,9 @@ class TwitchWebSocket(WebSocketApp):
             request_str = json.dumps(request, separators=(",", ":"))
             logger.debug(f"#{self.index} - Send: {request_str}")
             super().send(request_str)
-        except WebSocketConnectionClosedException:
+        except (WebSocketConnectionClosedException, OSError, RuntimeError):
+            # Network/socket errors can happen during reconnect windows; mark this
+            # socket as closed so pool health checks can reconnect it.
             self.is_closed = True
 
     def elapsed_last_pong(self):

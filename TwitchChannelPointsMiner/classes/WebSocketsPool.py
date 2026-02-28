@@ -48,6 +48,16 @@ class WebSocketsPool:
         self.__submit(-1, topic)
 
     def __submit(self, index, topic):
+        try:
+            str(topic)
+        except Exception as exc:
+            logger.warning(
+                "Skipping invalid PubSub topic '%s' (%s)",
+                getattr(topic, "topic", topic.__class__.__name__),
+                exc,
+            )
+            return
+
         # Topic in topics should never happen. Anyway prevent any types of duplicates
         if topic not in self.ws[index].topics:
             self.ws[index].topics.append(topic)
@@ -94,7 +104,11 @@ class WebSocketsPool:
     def on_open(ws):
         def run():
             ws.is_opened = True
-            ws.ping()
+            try:
+                ws.ping()
+            except Exception:
+                WebSocketsPool.handle_reconnection(ws)
+                return
 
             for topic in ws.pending_topics:
                 ws.listen(topic, ws.twitch.twitch_login.get_auth_token())
@@ -103,7 +117,11 @@ class WebSocketsPool:
                 # Else: the ws is currently in reconnecting phase, you can't do ping or other operation.
                 # Probably this ws will be closed very soon with ws.is_closed = True
                 if ws.is_reconnecting is False:
-                    ws.ping()  # We need ping for keep the connection alive
+                    try:
+                        ws.ping()  # We need ping for keep the connection alive
+                    except Exception:
+                        WebSocketsPool.handle_reconnection(ws)
+                        return
                     time.sleep(random.uniform(25, 30))
 
                     if ws.elapsed_last_pong() > 5:

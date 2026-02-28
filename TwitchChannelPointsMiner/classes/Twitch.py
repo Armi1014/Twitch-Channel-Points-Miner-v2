@@ -46,7 +46,7 @@ from TwitchChannelPointsMiner.constants import (
     URL,
     GQLOperations,
 )
-from TwitchChannelPointsMiner.watch_streak_cache import (
+from TwitchChannelPointsMiner.WatchStreakCache import (
     MAX_STREAK_ATTEMPTS_PER_BROADCAST,
     MIN_OFFLINE_FOR_NEW_STREAK,
     WatchStreakSession,
@@ -135,7 +135,10 @@ class Twitch(object):
         self.max_watch_amount = 2
         self._last_selection_was_streak = False
         self._last_streak_selection: set[str] = set()
-        self.max_streak_sessions = min(2, self.watch_streak_max_parallel or 2)
+        self.max_streak_sessions = min(
+            2,
+            2 if self.watch_streak_max_parallel is None else self.watch_streak_max_parallel,
+        )
         self.max_streak_attempts = MAX_STREAK_ATTEMPTS_PER_BROADCAST
         self.streak_watch_seconds = STREAK_MIN_SECONDS
         self._active_streak_attempts: Dict[str, ActiveWatchStreakAttempt] = {}
@@ -1736,51 +1739,3 @@ class Twitch(object):
         logger.info(f"Contributed {amount} channel points to community goal '{title}'")
         streamer.channel_points -= amount
 
-
-def _self_check_priority_selection():
-    from TwitchChannelPointsMiner.classes.entities.Streamer import (
-        Streamer,
-        StreamerSettings,
-    )
-    from TwitchChannelPointsMiner.watch_streak_cache import WatchStreakCache
-
-    twitch = Twitch("self-check", "ua")
-    twitch.watch_streak_cache = WatchStreakCache(default_account_name="self-check")
-    priorities = [Priority.STREAK, Priority.SUBSCRIBED, Priority.POINTS_ASCENDING]
-
-    def make_streamer(name, points, subscribed=False, watch_streak=True):
-        settings = StreamerSettings(
-            watch_streak=watch_streak,
-            claim_drops=False,
-            claim_moments=False,
-            make_predictions=False,
-            follow_raid=False,
-            community_goals=False,
-        )
-        streamer = Streamer(name, settings=settings)
-        streamer.channel_points = points
-        streamer.activeMultipliers = [{"factor": 2.0}] if subscribed else None
-        streamer.stream.watch_streak_missing = watch_streak
-        return streamer
-
-    streamers = [
-        make_streamer("subscribed_low", 10, subscribed=True, watch_streak=True),
-        make_streamer("other_low", 100, watch_streak=False),
-        make_streamer("other_high", 200, watch_streak=False),
-    ]
-    streamers_index = list(range(len(streamers)))
-    selection = twitch._select_streamers_to_watch(
-        streamers, streamers_index, priorities
-    )
-    assert len(selection) == 2, "Expected two watch slots to be filled"
-    assert (
-        streamers[selection[0]].username == "subscribed_low"
-    ), "Subscribed lowest-points streamer should take slot 1"
-    assert (
-        streamers[selection[1]].username == "other_low"
-    ), "Next best by points should take slot 2"
-    print("Priority selection self-check passed.")
-
-
-if __name__ == "__main__":
-    _self_check_priority_selection()

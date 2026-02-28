@@ -24,7 +24,7 @@ from TwitchChannelPointsMiner.classes.Settings import FollowersOrder, Priority, 
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
 from TwitchChannelPointsMiner.logger import LoggerSettings, configure_loggers
-from TwitchChannelPointsMiner.watch_streak_cache import WatchStreakCache
+from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.utils import (
     _millify,
     at_least_one_value_in_settings_is,
@@ -230,8 +230,8 @@ class TwitchChannelPointsMiner:
         followers: bool = False,
         followers_order: FollowersOrder = FollowersOrder.ASC,
     ):
-        streamers_list = list(streamers) if streamers is not None else None
-        blacklist_list = list(blacklist) if blacklist is not None else None
+        streamers_list = list(streamers) if streamers is not None else []
+        blacklist_list = list(blacklist) if blacklist is not None else []
         self.run(
             streamers=streamers_list,
             blacklist=blacklist_list,

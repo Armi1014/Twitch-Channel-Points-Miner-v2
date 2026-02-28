@@ -4,7 +4,7 @@ import unittest
 from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
-from TwitchChannelPointsMiner.watch_streak_cache import WatchStreakCache
+from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 
 
 class PrioritySortingTest(unittest.TestCase):

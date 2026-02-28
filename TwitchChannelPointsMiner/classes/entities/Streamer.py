@@ -134,11 +134,14 @@ class Streamer(object):
 
     def set_offline(self):
         now = time.time()
+        state_changed = False
         if self.is_online is True:
             self.offline_at = now
             self.is_online = False
+            state_changed = True
         elif self.offline_at == 0:
             self.offline_at = now
+            state_changed = True
 
         if self.watch_streak_cache is not None and self.watch_streak_account:
             if self.offline_at:
@@ -160,18 +163,21 @@ class Streamer(object):
 
         self.toggle_chat()
 
-        logger.info(
-            f"{self} is Offline!",
-            extra={
-                "emoji": ":sleeping:",
-                "event": Events.STREAMER_OFFLINE,
-            },
-        )
+        if state_changed:
+            logger.info(
+                f"{self} is Offline!",
+                extra={
+                    "emoji": ":sleeping:",
+                    "event": Events.STREAMER_OFFLINE,
+                },
+            )
 
     def set_online(self):
+        state_changed = False
         if self.is_online is False:
             self.online_at = time.time()
             self.is_online = True
+            state_changed = True
             self.stream.init_watch_streak()
             if (
                 self.watch_streak_cache is not None
@@ -187,13 +193,14 @@ class Streamer(object):
 
         self.toggle_chat()
 
-        logger.info(
-            f"{self} is Online!",
-            extra={
-                "emoji": ":partying_face:",
-                "event": Events.STREAMER_ONLINE,
-            },
-        )
+        if state_changed:
+            logger.info(
+                f"{self} is Online!",
+                extra={
+                    "emoji": ":partying_face:",
+                    "event": Events.STREAMER_ONLINE,
+                },
+            )
 
     def print_history(self):
         return "; ".join(
