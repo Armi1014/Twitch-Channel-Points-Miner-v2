@@ -65,6 +65,27 @@ class RequestRetryTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(mocked_request.call_count, 2)
 
+    def test_request_with_retry_retries_chunked_encoding_error(self):
+        chunk_error = requests.exceptions.ChunkedEncodingError(
+            "InvalidChunkLength(got length b'\\r\\n', 0 bytes read)"
+        )
+        ok_response = FakeResponse(status_code=200)
+
+        with patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.request",
+            side_effect=[chunk_error, ok_response],
+        ) as mocked_request:
+            response = self.twitch._request_with_retry(
+                "GET",
+                "https://example.com",
+                request_name="test_retry_chunked_error",
+                max_attempts=3,
+                backoff_base=0,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mocked_request.call_count, 2)
+
     def test_request_with_retry_does_not_retry_non_retryable_connection_error(self):
         connection_reset = requests.exceptions.ConnectionError("Connection reset by peer")
 

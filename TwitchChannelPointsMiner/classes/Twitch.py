@@ -572,6 +572,7 @@ class Twitch(object):
             (
                 requests.exceptions.ConnectTimeout,
                 requests.exceptions.ReadTimeout,
+                requests.exceptions.ChunkedEncodingError,
             ),
         ):
             return True
