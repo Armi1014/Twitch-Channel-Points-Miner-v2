@@ -23,6 +23,7 @@ from TwitchChannelPointsMiner.classes.Exceptions import StreamerDoesNotExistExce
 from TwitchChannelPointsMiner.classes.Settings import FollowersOrder, Priority, Settings
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
+from TwitchChannelPointsMiner.constants import FORK_OWNER, GITHUB_REPO_URL
 from TwitchChannelPointsMiner.logger import LoggerSettings, configure_loggers
 from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.utils import (
@@ -202,9 +203,9 @@ class TwitchChannelPointsMiner:
         current_version, github_version = check_versions()
 
         logger.info(
-            f"Twitch Channel Points Miner v2-{current_version} (fork by rdavydov)"
+            f"Twitch Channel Points Miner v{current_version} (fork by {FORK_OWNER})"
         )
-        logger.info("https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2")
+        logger.info(GITHUB_REPO_URL)
 
         if github_version == "0.0.0":
             logger.error(

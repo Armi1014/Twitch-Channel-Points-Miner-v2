@@ -31,10 +31,11 @@ USER_AGENTS = {
 }
 
 BRANCH = "master"
-GITHUB_url = (
-    "https://raw.githubusercontent.com/rdavydov/Twitch-Channel-Points-Miner-v2/"
-    + BRANCH
-)
+FORK_OWNER = "Armi1014"
+FORK_REPO = "Twitch-Channel-Points-Miner-v2"
+GITHUB_REPO_URL = f"https://github.com/{FORK_OWNER}/{FORK_REPO}"
+GITHUB_RAW_BASE_URL = f"https://raw.githubusercontent.com/{FORK_OWNER}/{FORK_REPO}/"
+GITHUB_url = GITHUB_RAW_BASE_URL + BRANCH
 
 
 class GQLOperations:
