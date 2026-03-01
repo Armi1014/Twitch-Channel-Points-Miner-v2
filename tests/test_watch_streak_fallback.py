@@ -24,7 +24,7 @@ class WatchStreakFallbackTest(unittest.TestCase):
         streamer.online_at = time.time() - 600
         streamer.stream.broadcast_id = "broadcastA"
         streamer.stream.watch_streak_missing = True
-        streamer.history["WATCH"] = {"counter": 1, "amount": 10}
+        streamer.history["WATCH"] = {"counter": 2, "amount": 20}
 
         now = time.time()
         session = twitch.watch_streak_cache.ensure_session(
@@ -37,7 +37,7 @@ class WatchStreakFallbackTest(unittest.TestCase):
             session_key=session.key(),
             streamer=streamer.username,
             broadcast_id=streamer.stream.broadcast_id,
-            started_at=now - twitch.streak_watch_seconds - 5,
+            started_at=now - 30,
             watch_counter_at_start=0,
         )
         twitch._active_streak_attempts[session.key()] = attempt
