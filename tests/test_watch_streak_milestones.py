@@ -1,9 +1,11 @@
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.classes.Settings import Priority
+from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.classes.Twitch import ActiveWatchStreakAttempt, Twitch
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
 
@@ -73,6 +75,66 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(stream_info)
         self.assertIn("createdAt", stream_info["stream"])
         self.assertFalse(stream_info.get("watchStreakMissing", True))
+
+    def test_update_stream_marks_cache_claimed_when_milestone_indicates_completed(self):
+        twitch = Twitch("milestone-claim", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-claim")
+        streamer = self._make_streamer("streamer")
+        Settings.logger = SimpleNamespace(less=True)
+
+        responses = {
+            "VideoPlayerStreamInfoOverlayChannel": {
+                "data": {
+                    "user": {
+                        "stream": {
+                            "id": "broadcast-claim-1",
+                            "tags": [],
+                            "viewersCount": 21,
+                        },
+                        "broadcastSettings": {"title": "title", "game": {}},
+                    }
+                }
+            },
+            "WithIsStreamLiveQuery": {
+                "data": {
+                    "user": {
+                        "stream": {
+                            "id": "broadcast-claim-1",
+                            "createdAt": "2026-03-01T10:00:00Z",
+                        }
+                    }
+                }
+            },
+            "RewardList": {
+                "data": {
+                    "channel": {
+                        "self": {
+                            "watchStreakMilestone": {
+                                "watchStreakMilestone": {
+                                    "achievementTimestamp": "2026-03-01T10:07:00Z"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            updated = twitch.update_stream(streamer)
+
+        self.assertTrue(updated)
+        session = twitch.watch_streak_cache.get_session(
+            streamer.username,
+            "broadcast-claim-1",
+            account_name=twitch.account_username,
+        )
+        self.assertIsNotNone(session)
+        self.assertTrue(session.claimed)
+        self.assertFalse(streamer.stream.watch_streak_missing)
 
     def test_cleanup_ends_attempt_after_two_watch_events(self):
         twitch = Twitch("watch-events-test", "ua")

@@ -203,6 +203,19 @@ class Twitch(object):
 
         if stream_info.get("watchStreakMissing") is False:
             streamer.stream.watch_streak_missing = False
+            if self.watch_streak_cache is not None and streamer.stream.broadcast_id:
+                session = self.watch_streak_cache.get_session(
+                    streamer.username,
+                    streamer.stream.broadcast_id,
+                    account_name=self.account_username,
+                )
+                if session is None or session.claimed is False:
+                    self.watch_streak_cache.mark_claimed(
+                        streamer.username,
+                        broadcast_id=streamer.stream.broadcast_id,
+                        now=time.time(),
+                        account_name=self.account_username,
+                    )
 
         event_properties = {
             "channel_id": streamer.channel_id,
