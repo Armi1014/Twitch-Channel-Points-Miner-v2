@@ -64,10 +64,13 @@ Relevant code:
 ## 5) Priority/selection quality
 
 - Priority behavior and tie-breaking around STREAK/DROPS/SUBSCRIBED have been tightened and regression-tested.
+- Added explicit `Priority.FAVORITE` + `StreamerSettings.favorite` for predictable `STREAK -> FAVORITE -> ...` policy.
+- STREAK selection now rotates eligible candidates to reduce starvation when many channels go live together.
 
 Relevant tests:
 - `tests/test_priority_selection.py`
 - `tests/test_priority_sorting.py`
+- `tests/test_priority_favorite.py`
 - `tests/test_watch_streak_fallback.py`
 - `tests/test_websocket_badtopic.py`
 
