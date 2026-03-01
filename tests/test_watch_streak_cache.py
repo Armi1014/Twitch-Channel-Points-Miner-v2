@@ -36,7 +36,8 @@ class WatchStreakCacheTest(unittest.TestCase):
         )
         self.assertTrue(cache.should_create_session("streamer"))
 
-        cache._prune_stale_sessions(now + STALE_SESSION_TTL_SECONDS + 10)
+        # Session ended at now + 20 above, so prune after ttl + margin from that point.
+        cache._prune_stale_sessions(now + STALE_SESSION_TTL_SECONDS + 60)
         self.assertIsNone(cache.get_session("streamer", "broadcastA"))
 
 

@@ -73,6 +73,7 @@ class ActiveWatchStreakAttempt:
     streamer: str
     broadcast_id: str
     started_at: float
+    watch_counter_at_start: int = 0
 
 
 class Twitch(object):
@@ -91,6 +92,7 @@ class Twitch(object):
         "_stream_info_cache",
         "watch_streak_cache",
         "_last_gql_error_log",
+        "_last_watch_issue_log",
         "_drop_progress_log",
         "watch_streak_max_parallel",
         "max_watch_amount",
@@ -126,6 +128,7 @@ class Twitch(object):
         self._stream_info_cache = {}
         self.watch_streak_cache = None
         self._last_gql_error_log = {}
+        self._last_watch_issue_log = {}
         self._drop_progress_log: Dict[str, int] = {}
         self.watch_streak_max_parallel = (
             max(1, int(watch_streak_max_parallel))
@@ -567,7 +570,33 @@ class Twitch(object):
     def _invalidate_stream_info_cache(self, cache_key):
         self._stream_info_cache.pop(cache_key, None)
 
+    def _operation_name_from_json_data(self, json_data):
+        if isinstance(json_data, dict):
+            return json_data.get("operationName", "UnknownOperation")
+        if isinstance(json_data, list) and json_data:
+            first = json_data[0]
+            if isinstance(first, dict):
+                return first.get("operationName", "UnknownOperation")
+        return "UnknownOperation"
+
+    def _log_watch_issue(
+        self,
+        streamer_username: str,
+        issue_key: str,
+        message: str,
+        *args,
+        ttl: int = 120,
+        level: int = logging.WARNING,
+    ):
+        key = (streamer_username, issue_key)
+        now = time.time()
+        last_logged = self._last_watch_issue_log.get(key, 0)
+        if now - last_logged >= ttl:
+            logger.log(level, message, *args)
+            self._last_watch_issue_log[key] = now
+
     def post_gql_request(self, json_data):
+        operation_name = self._operation_name_from_json_data(json_data)
         try:
             response = requests.post(
                 GQLOperations.url,
@@ -581,28 +610,27 @@ class Twitch(object):
                     "User-Agent": self.user_agent,
                     "X-Device-Id": self.device_id,
                 },
+                timeout=20,
             )
             logger.debug(
                 f"Data: {json_data}, Status code: {response.status_code}, Content: {response.text}"
             )
+            if response.status_code < 200 or response.status_code >= 300:
+                logger.warning(
+                    "GQL operation %s returned HTTP status %s",
+                    operation_name,
+                    response.status_code,
+                )
             try:
                 return response.json()
             except ValueError:
-                operation_name = (
-                    json_data.get("operationName")
-                    if isinstance(json_data, dict)
-                    else "UnknownOperation"
-                )
                 logger.warning(
-                    "Invalid JSON response for %s (status %s)", operation_name, response.status_code
+                    "Invalid JSON response for %s (status %s)",
+                    operation_name,
+                    response.status_code,
                 )
                 return {}
         except requests.exceptions.RequestException as e:
-            operation_name = (
-                json_data.get("operationName")
-                if isinstance(json_data, dict)
-                else "UnknownOperation"
-            )
             self._log_request_exception(operation_name, str(e))
             return {}
 
@@ -904,6 +932,12 @@ class Twitch(object):
             return False
         return True
 
+    def _watch_reward_counter(self, streamer) -> int:
+        watch_history = streamer.history.get("WATCH", {})
+        if isinstance(watch_history, dict):
+            return int(watch_history.get("counter", 0) or 0)
+        return 0
+
     def _log_streak_start(self, session: WatchStreakSession):
         return
 
@@ -966,6 +1000,7 @@ class Twitch(object):
                 account_name=self.account_username,
                 max_attempts=self.max_streak_attempts,
             )
+            watch_reward_seen = self._watch_reward_counter(streamer_obj) > attempt.watch_counter_at_start
 
             if streamer_obj.stream.watch_streak_missing is False:
                 session = self.watch_streak_cache.mark_claimed(
@@ -977,6 +1012,24 @@ class Twitch(object):
 
             if session.claimed:
                 self._log_streak_claimed(session)
+                continue
+
+            if watch_reward_seen:
+                # We watched long enough to get a WATCH reward but didn't observe a WATCH_STREAK
+                # reward. End streak checks for this broadcast to avoid repeatedly occupying
+                # a watch slot in cases where Twitch won't emit WATCH_STREAK for this session.
+                streamer_obj.stream.watch_streak_missing = False
+                self.watch_streak_cache.mark_ended(
+                    attempt.streamer,
+                    attempt.broadcast_id,
+                    ended_at=now,
+                    account_name=self.account_username,
+                )
+                logger.debug(
+                    "[streak] %s ended after WATCH without WATCH_STREAK for broadcast %s",
+                    attempt.streamer,
+                    attempt.broadcast_id,
+                )
                 continue
 
             if session.attempts >= self.max_streak_attempts:
@@ -1036,6 +1089,7 @@ class Twitch(object):
                     streamer=streamer.username,
                     broadcast_id=session.broadcast_id,
                     started_at=now,
+                    watch_counter_at_start=self._watch_reward_counter(streamer),
                 )
                 self._active_streak_attempts[session.key()] = attempt
                 active_streamers.add(streamer.username)
@@ -1101,8 +1155,13 @@ class Twitch(object):
                                 f"Sent PlaybackAccessToken request for {streamers[index]}")
 
                             if 'data' not in responsePlaybackAccessToken:
-                                logger.error(
-                                    f"Invalid response from Twitch: {responsePlaybackAccessToken}")
+                                self._log_watch_issue(
+                                    streamers[index].username,
+                                    "invalid_playback_access_token",
+                                    "Invalid PlaybackAccessToken response for %s: %s",
+                                    streamers[index].username,
+                                    responsePlaybackAccessToken,
+                                )
                                 continue
 
                             streamPlaybackAccessToken = responsePlaybackAccessToken["data"].get(
@@ -1112,13 +1171,22 @@ class Twitch(object):
                             value = streamPlaybackAccessToken.get("value")
 
                             if not signature or not value:
-                                logger.error(
-                                    f"Missing signature or value in Twitch response: {responsePlaybackAccessToken}")
+                                self._log_watch_issue(
+                                    streamers[index].username,
+                                    "missing_playback_signature_or_value",
+                                    "Missing signature/value in PlaybackAccessToken response for %s",
+                                    streamers[index].username,
+                                )
                                 continue
 
                         except Exception as e:
-                            logger.error(
-                                f"Error fetching PlaybackAccessToken for {streamers[index]}: {str(e)}")
+                            self._log_watch_issue(
+                                streamers[index].username,
+                                "playback_access_token_exception",
+                                "Error fetching PlaybackAccessToken for %s: %s",
+                                streamers[index],
+                                str(e),
+                            )
                             continue
 
                         # encoded_value = quote(json.dumps(value))
@@ -1200,12 +1268,22 @@ class Twitch(object):
                                     self._log_drop_progress(streamers[index], drop, drops_logging_enabled)
 
                     except requests.exceptions.ConnectionError as e:
-                        logger.error(
-                            f"Error while trying to send minute watched: {e}")
+                        self._log_watch_issue(
+                            streamers[index].username,
+                            "send_minute_watched_connection_error",
+                            "Error while trying to send minute watched for %s: %s",
+                            streamers[index].username,
+                            e,
+                        )
                         self.__check_connection_handler(chunk_size)
                     except requests.exceptions.Timeout as e:
-                        logger.error(
-                            f"Error while trying to send minute watched: {e}")
+                        self._log_watch_issue(
+                            streamers[index].username,
+                            "send_minute_watched_timeout",
+                            "Timeout while trying to send minute watched for %s: %s",
+                            streamers[index].username,
+                            e,
+                        )
 
                     self.__chuncked_sleep(
                         next_iteration - time.time(), chunk_size=chunk_size
@@ -1738,4 +1816,3 @@ class Twitch(object):
 
         logger.info(f"Contributed {amount} channel points to community goal '{title}'")
         streamer.channel_points -= amount
-

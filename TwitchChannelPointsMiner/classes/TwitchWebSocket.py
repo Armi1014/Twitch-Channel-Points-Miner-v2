@@ -31,6 +31,9 @@ class TwitchWebSocket(WebSocketApp):
 
         self.last_message_timestamp = None
         self.last_message_type_channel = None
+        # Map LISTEN nonces to topics so RESPONSE errors (e.g. ERR_BADTOPIC)
+        # can be tied back to the original subscription request.
+        self.listen_nonces = {}
 
         self.last_pong = time.time()
         self.last_ping = time.time()
@@ -44,6 +47,7 @@ class TwitchWebSocket(WebSocketApp):
         if topic.is_user_topic() and auth_token is not None:
             data["auth_token"] = auth_token
         nonce = create_nonce()
+        self.listen_nonces[nonce] = topic
         self.send({"type": "LISTEN", "nonce": nonce, "data": data})
 
     def ping(self):
