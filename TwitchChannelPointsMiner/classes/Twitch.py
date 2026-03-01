@@ -920,6 +920,11 @@ class Twitch(object):
                     else float("inf")
                 )
                 key_parts.append((sub_rank, points))
+            elif prior == Priority.FAVORITE:
+                favorite_rank = (
+                    0 if getattr(streamer.settings, "favorite", False) is True else 1
+                )
+                key_parts.append((favorite_rank, order_map.get(idx, idx)))
             elif prior == Priority.STREAK:
                 session = self._ensure_watch_streak_session(streamer, now)
                 eligible = self._session_is_eligible(session, streamer)
@@ -945,6 +950,15 @@ class Twitch(object):
                 key=lambda x: streamers[x].channel_points,
                 reverse=(prior == Priority.POINTS_DESCENDING),
             )
+
+        if prior == Priority.FAVORITE:
+            order_map = {idx: pos for pos, idx in enumerate(streamers_index)}
+            favorites = [
+                index
+                for index in streamers_index
+                if getattr(streamers[index].settings, "favorite", False) is True
+            ]
+            return sorted(favorites, key=lambda idx: order_map.get(idx, idx))
 
         if prior == Priority.STREAK:
             candidates = []

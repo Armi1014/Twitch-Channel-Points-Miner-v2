@@ -22,6 +22,7 @@ class StreamerSettings(object):
         "claim_drops",
         "claim_moments",
         "watch_streak",
+        "favorite",
         "community_goals",
         "bet",
         "chat",
@@ -34,6 +35,7 @@ class StreamerSettings(object):
         claim_drops: bool = None,
         claim_moments: bool = None,
         watch_streak: bool = None,
+        favorite: bool = None,
         community_goals: bool = None,
         bet: BetSettings = None,
         chat: ChatPresence = None,
@@ -43,6 +45,7 @@ class StreamerSettings(object):
         self.claim_drops = claim_drops
         self.claim_moments = claim_moments
         self.watch_streak = watch_streak
+        self.favorite = favorite
         self.community_goals = community_goals
         self.bet = bet
         self.chat = chat
@@ -57,6 +60,8 @@ class StreamerSettings(object):
         ]:
             if getattr(self, name) is None:
                 setattr(self, name, True)
+        if self.favorite is None:
+            self.favorite = False
         if self.community_goals is None:
             self.community_goals = False
         if self.bet is None:
@@ -65,7 +70,7 @@ class StreamerSettings(object):
             self.chat = ChatPresence.ONLINE
 
     def __repr__(self):
-        return f"BetSettings(make_predictions={self.make_predictions}, follow_raid={self.follow_raid}, claim_drops={self.claim_drops}, claim_moments={self.claim_moments}, watch_streak={self.watch_streak}, community_goals={self.community_goals}, bet={self.bet}, chat={self.chat})"
+        return f"BetSettings(make_predictions={self.make_predictions}, follow_raid={self.follow_raid}, claim_drops={self.claim_drops}, claim_moments={self.claim_moments}, watch_streak={self.watch_streak}, favorite={self.favorite}, community_goals={self.community_goals}, bet={self.bet}, chat={self.chat})"
 
 
 class Streamer(object):
