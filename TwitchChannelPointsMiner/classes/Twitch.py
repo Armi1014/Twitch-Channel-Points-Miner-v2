@@ -65,6 +65,18 @@ STREAMER_INIT_TIMEOUT_PER_STREAMER = 5  # seconds
 STREAM_INFO_CACHE_TTL = 30  # seconds
 GQL_ERROR_LOG_TTL = 60  # seconds
 STREAK_MIN_SECONDS = 5 * 60  # Qualifying watch time before attempting a streak
+HTTP_RETRY_ATTEMPTS = 3
+HTTP_RETRY_BACKOFF_BASE = 0.5
+HTTP_RETRY_BACKOFF_CAP = 5.0
+RETRYABLE_CONNECTION_SETUP_MARKERS = (
+    "failed to establish a new connection",
+    "failed to create new connection",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "nodename nor servname provided",
+    "getaddrinfo failed",
+    "name resolution",
+)
 
 
 @dataclass
@@ -211,18 +223,36 @@ class Twitch(object):
 
             headers = {"User-Agent": USER_AGENTS["Linux"]["FIREFOX"]}
 
-            main_page_request = requests.get(
-                streamer.streamer_url, headers=headers)
+            main_page_request = self._request_with_retry(
+                "GET",
+                streamer.streamer_url,
+                request_name=f"get_spade_url_main:{streamer.username}",
+                headers=headers,
+                timeout=20,
+            )
             response = main_page_request.text
             # logger.info(response)
             regex_settings = "(https://static.twitchcdn.net/config/settings.*?js|https://assets.twitch.tv/config/settings.*?.js)"
-            settings_url = re.search(regex_settings, response).group(1)
+            settings_match = re.search(regex_settings, response)
+            if settings_match is None:
+                logger.debug("Unable to find settings URL while extracting spade_url for %s", streamer.username)
+                return
+            settings_url = settings_match.group(1)
 
-            settings_request = requests.get(settings_url, headers=headers)
+            settings_request = self._request_with_retry(
+                "GET",
+                settings_url,
+                request_name=f"get_spade_url_settings:{streamer.username}",
+                headers=headers,
+                timeout=20,
+            )
             response = settings_request.text
             regex_spade = '"spade_url":"(.*?)"'
-            streamer.stream.spade_url = re.search(
-                regex_spade, response).group(1)
+            spade_match = re.search(regex_spade, response)
+            if spade_match is None:
+                logger.debug("Unable to find spade_url in settings response for %s", streamer.username)
+                return
+            streamer.stream.spade_url = spade_match.group(1)
         except requests.exceptions.RequestException as e:
             logger.error(
                 f"Something went wrong during extraction of 'spade_url': {e}")
@@ -455,6 +485,57 @@ class Twitch(object):
             )
             self.__chuncked_sleep(random_sleep * 60, chunk_size=chunk_size)
 
+    def _is_retryable_connection_setup_error(self, exception):
+        if isinstance(exception, requests.exceptions.ConnectTimeout):
+            return True
+        if not isinstance(exception, requests.exceptions.ConnectionError):
+            return False
+
+        message = str(exception).lower()
+        return any(marker in message for marker in RETRYABLE_CONNECTION_SETUP_MARKERS)
+
+    def _request_with_retry(
+        self,
+        method,
+        url,
+        *,
+        request_name,
+        max_attempts=HTTP_RETRY_ATTEMPTS,
+        backoff_base=HTTP_RETRY_BACKOFF_BASE,
+        backoff_cap=HTTP_RETRY_BACKOFF_CAP,
+        **kwargs,
+    ):
+        attempt = 1
+        while True:
+            try:
+                return requests.request(method, url, **kwargs)
+            except requests.exceptions.RequestException as exc:
+                if (
+                    attempt >= max_attempts
+                    or self._is_retryable_connection_setup_error(exc) is False
+                ):
+                    raise
+
+                delay = min(backoff_cap, backoff_base * (2 ** (attempt - 1)))
+                if delay > 0:
+                    delay += random.uniform(0.0, min(0.25, delay / 2))
+
+                logger.debug(
+                    "%s failed with transient connection setup error (%d/%d): %s. Retrying in %.2fs",
+                    request_name,
+                    attempt,
+                    max_attempts,
+                    exc,
+                    delay,
+                )
+                if delay > 0:
+                    interruptible_sleep(
+                        lambda: self.running,
+                        delay,
+                        step=max(0.1, min(0.5, delay)),
+                    )
+                attempt += 1
+
     def _log_gql_errors(self, operation_name, response):
         if not isinstance(response, dict):
             return False
@@ -598,8 +679,10 @@ class Twitch(object):
     def post_gql_request(self, json_data):
         operation_name = self._operation_name_from_json_data(json_data)
         try:
-            response = requests.post(
+            response = self._request_with_retry(
+                "POST",
                 GQLOperations.url,
+                request_name=f"post_gql_request:{operation_name}",
                 json=json_data,
                 headers={
                     "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
@@ -692,7 +775,12 @@ class Twitch(object):
 
     def update_client_version(self):
         try:
-            response = requests.get(URL)
+            response = self._request_with_retry(
+                "GET",
+                URL,
+                request_name="update_client_version",
+                timeout=20,
+            )
             if response.status_code != 200:
                 logger.debug(
                     f"Error with update_client_version: {response.status_code}"
@@ -706,8 +794,8 @@ class Twitch(object):
             logger.debug(f"Client version: {self.client_version}")
             return self.client_version
         except requests.exceptions.RequestException as e:
-                logger.error(f"Error with update_client_version: {e}")
-                return self.client_version
+            logger.error(f"Error with update_client_version: {e}")
+            return self.client_version
 
     def _drop_progress_value(self, streamer):
         campaigns = getattr(streamer.stream, "campaigns", []) or []
@@ -1195,8 +1283,10 @@ class Twitch(object):
                         RequestBroadcastQualitiesURL = f"https://usher.ttvnw.net/api/channel/hls/{streamers[index].username}.m3u8?sig={signature}&token={value}"
 
                         # Get list of video qualities
-                        responseBroadcastQualities = requests.get(
+                        responseBroadcastQualities = self._request_with_retry(
+                            "GET",
                             RequestBroadcastQualitiesURL,
+                            request_name=f"broadcast_qualities:{streamers[index].username}",
                             headers={"User-Agent": self.user_agent},
                             timeout=20,
                         )  # timeout=60
@@ -1214,8 +1304,10 @@ class Twitch(object):
                             continue
 
                         # Get list of video URLs
-                        responseStreamURLList = requests.get(
+                        responseStreamURLList = self._request_with_retry(
+                            "GET",
                             BroadcastLowestQualityURL,
+                            request_name=f"stream_url_list:{streamers[index].username}",
                             headers={"User-Agent": self.user_agent},
                             timeout=20,
                         )  # timeout=60
@@ -1232,8 +1324,10 @@ class Twitch(object):
                             continue
 
                         # Perform a HEAD request to simulate watching the stream
-                        responseStreamLowestQualityURL = requests.head(
+                        responseStreamLowestQualityURL = self._request_with_retry(
+                            "HEAD",
                             StreamLowestQualityURL,
+                            request_name=f"stream_lowest_quality_head:{streamers[index].username}",
                             headers={"User-Agent": self.user_agent},
                             timeout=20,
                         )  # timeout=60
@@ -1244,8 +1338,10 @@ class Twitch(object):
                             continue
                         # End of fix for 2024/5 API Change
                         ##################################
-                        response = requests.post(
+                        response = self._request_with_retry(
+                            "POST",
                             streamers[index].stream.spade_url,
+                            request_name=f"minute_watched:{streamers[index].username}",
                             data=streamers[index].stream.encode_payload(),
                             headers={"User-Agent": self.user_agent},
                             # timeout=60,
