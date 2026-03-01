@@ -30,7 +30,7 @@ Relevant code:
 
 ## 2) Watch streak reliability upgrades
 
-- Persisted watch streak cache (`logs/watch_streak_cache.json`) to avoid wasting startup time repeating stale checks.
+- Persisted watch streak cache (`logs/watch_streak_cache.<account>.json`) to avoid wasting startup time repeating stale checks.
 - Session-based watch streak tracking (attempts, claim state, ended state, broadcast identity).
 - Better handling for Twitch observability gaps:
   - if a watch window completes and `WATCH` is observed but `WATCH_STREAK` is not emitted, the miner now ends that streak attempt for that broadcast instead of getting stuck retrying it.

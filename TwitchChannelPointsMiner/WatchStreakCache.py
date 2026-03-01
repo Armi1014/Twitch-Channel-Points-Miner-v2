@@ -86,7 +86,10 @@ class WatchStreakCache:
 
     @classmethod
     def load_from_disk(
-        cls, path: str, default_account_name: str | None = None
+        cls,
+        path: str,
+        default_account_name: str | None = None,
+        account_filter: str | None = None,
     ) -> "WatchStreakCache":
         raw_data: Dict[str, object] = {}
         if not os.path.isfile(path):
@@ -107,6 +110,9 @@ class WatchStreakCache:
                 raw_data = {}
 
         sessions: Dict[str, WatchStreakSession] = {}
+        normalized_account_filter = (
+            account_filter.lower() if isinstance(account_filter, str) else None
+        )
         if isinstance(raw_data, dict) and isinstance(raw_data.get("sessions"), list):
             for raw_session in raw_data.get("sessions", []):
                 if not isinstance(raw_session, dict):
@@ -118,6 +124,9 @@ class WatchStreakCache:
                     continue
                 if not session.account_name or not session.streamer_login or not session.broadcast_id:
                     continue
+                if normalized_account_filter is not None:
+                    if session.account_name.lower() != normalized_account_filter:
+                        continue
                 sessions[session.key()] = session
         elif isinstance(raw_data, dict) and raw_data:
             # Backwards compatibility: old format was {<streamer_login>: {"last_streak_timestamp": ts}}

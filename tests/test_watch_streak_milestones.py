@@ -24,6 +24,15 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         streamer.channel_id = "123456"
         return streamer
 
+    def test_extract_stream_created_timestamp_handles_null_nodes(self):
+        twitch = Twitch("stream-created-null", "ua")
+        self.assertIsNone(twitch._extract_stream_created_timestamp({"data": {"user": None}}))
+        self.assertIsNone(
+            twitch._extract_stream_created_timestamp(
+                {"data": {"user": {"stream": None}}}
+            )
+        )
+
     def test_get_stream_info_marks_streak_complete_from_milestone_timestamp(self):
         twitch = Twitch("milestone-test", "ua")
         streamer = self._make_streamer("streamer")
@@ -75,6 +84,49 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(stream_info)
         self.assertIn("createdAt", stream_info["stream"])
         self.assertFalse(stream_info.get("watchStreakMissing", True))
+
+    def test_get_stream_info_handles_null_reward_list_channel_without_crashing(self):
+        twitch = Twitch("milestone-null-channel", "ua")
+        streamer = self._make_streamer("streamer")
+
+        responses = {
+            "VideoPlayerStreamInfoOverlayChannel": {
+                "data": {
+                    "user": {
+                        "stream": {
+                            "id": "broadcast-null-1",
+                            "tags": [],
+                            "viewersCount": 12,
+                        },
+                        "broadcastSettings": {"title": "title", "game": {}},
+                    }
+                }
+            },
+            "WithIsStreamLiveQuery": {
+                "data": {
+                    "user": {
+                        "stream": {
+                            "id": "broadcast-null-1",
+                            "createdAt": "2026-03-01T10:00:00Z",
+                        }
+                    }
+                }
+            },
+            "RewardList": {
+                "data": {
+                    "channel": None,
+                }
+            },
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            stream_info = twitch.get_stream_info(streamer)
+
+        self.assertIsNotNone(stream_info)
+        self.assertNotIn("watchStreakMissing", stream_info)
 
     def test_update_stream_marks_cache_claimed_when_milestone_indicates_completed(self):
         twitch = Twitch("milestone-claim", "ua")

@@ -715,20 +715,31 @@ class Twitch(object):
     def _extract_stream_created_timestamp(self, response):
         if not isinstance(response, dict):
             return None
-        created_at = (
-            response.get("data", {}).get("user", {}).get("stream", {}).get("createdAt")
-        )
+        data = response.get("data")
+        if not isinstance(data, dict):
+            return None
+        user = data.get("user")
+        if not isinstance(user, dict):
+            return None
+        stream = user.get("stream")
+        if not isinstance(stream, dict):
+            return None
+        created_at = stream.get("createdAt")
         return self._parse_iso8601_timestamp(created_at)
 
     def _extract_watch_streak_achievement_timestamp(self, response):
         if not isinstance(response, dict):
             return None
-        milestone = (
-            response.get("data", {})
-            .get("channel", {})
-            .get("self", {})
-            .get("watchStreakMilestone")
-        )
+        data = response.get("data")
+        if not isinstance(data, dict):
+            return None
+        channel = data.get("channel")
+        if not isinstance(channel, dict):
+            return None
+        viewer_self = channel.get("self")
+        if not isinstance(viewer_self, dict):
+            return None
+        milestone = viewer_self.get("watchStreakMilestone")
         if not isinstance(milestone, dict):
             return None
 

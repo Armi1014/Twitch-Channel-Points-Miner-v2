@@ -152,9 +152,28 @@ class TwitchChannelPointsMiner:
         )
 
         self.claim_drops_startup = claim_drops_startup
-        self.watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
+        safe_account_name = "".join(
+            ch if (ch.isalnum() or ch in "._-") else "_"
+            for ch in self.username.lower()
+        )
+        self.watch_streak_cache_path = os.path.join(
+            "logs", f"watch_streak_cache.{safe_account_name}.json"
+        )
+        legacy_watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
+        initial_cache_load_path = self.watch_streak_cache_path
+        if (
+            os.path.isfile(self.watch_streak_cache_path) is False
+            and os.path.isfile(legacy_watch_streak_cache_path) is True
+        ):
+            initial_cache_load_path = legacy_watch_streak_cache_path
+            logger.info(
+                "Using legacy watch streak cache file for this startup: %s",
+                legacy_watch_streak_cache_path,
+            )
         self.watch_streak_cache = WatchStreakCache.load_from_disk(
-            self.watch_streak_cache_path, default_account_name=self.username
+            initial_cache_load_path,
+            default_account_name=self.username,
+            account_filter=self.username,
         )
         self.twitch.watch_streak_cache = self.watch_streak_cache
         if priority is None:
@@ -264,7 +283,9 @@ class TwitchChannelPointsMiner:
                 self.twitch.claim_all_drops_from_inventory()
 
             self.watch_streak_cache = WatchStreakCache.load_from_disk(
-                self.watch_streak_cache_path, default_account_name=self.username
+                self.watch_streak_cache_path,
+                default_account_name=self.username,
+                account_filter=self.username,
             )
             self.twitch.watch_streak_cache = self.watch_streak_cache
 
