@@ -217,6 +217,11 @@ class Streamer(object):
         self.history[reason_code]["counter"] += counter
         self.history[reason_code]["amount"] += earned
 
+        if reason_code == "WATCH":
+            self.stream.watch_count = max(
+                0, int(getattr(self.stream, "watch_count", 0)) + int(counter or 0)
+            )
+
         if reason_code is not None and "WATCH_STREAK" in str(reason_code):
             self.stream.watch_streak_missing = False
             if self.watch_streak_cache is not None:
@@ -230,6 +235,10 @@ class Streamer(object):
                     self.watch_streak_cache.save_to_disk_if_dirty(
                         self.watch_streak_cache_path
                     )
+        elif self.stream.watch_streak_missing and self.stream.watch_count >= 2:
+            # In practice, two WATCH rewards is a reliable proxy that streak
+            # progress for the current stream has already been counted.
+            self.stream.watch_streak_missing = False
 
     def stream_up_elapsed(self):
         return self.stream_up == 0 or ((time.time() - self.stream_up) > 120)

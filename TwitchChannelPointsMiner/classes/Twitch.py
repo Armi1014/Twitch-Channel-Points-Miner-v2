@@ -65,6 +65,8 @@ STREAMER_INIT_TIMEOUT_PER_STREAMER = 5  # seconds
 STREAM_INFO_CACHE_TTL = 30  # seconds
 GQL_ERROR_LOG_TTL = 60  # seconds
 STREAK_MIN_SECONDS = 5 * 60  # Qualifying watch time before attempting a streak
+STREAK_WATCH_EVENTS_TARGET = 2
+STREAK_ATTEMPT_TIMEOUT_SECONDS = 12 * 60
 HTTP_RETRY_ATTEMPTS = 3
 HTTP_RETRY_BACKOFF_BASE = 0.5
 HTTP_RETRY_BACKOFF_CAP = 5.0
@@ -112,9 +114,12 @@ class Twitch(object):
         "_last_streak_selection",
         "max_streak_sessions",
         "streak_watch_seconds",
+        "streak_watch_events_target",
+        "streak_attempt_timeout_seconds",
         "max_streak_attempts",
         "_active_streak_attempts",
         "_streak_outcomes_logged",
+        "_streak_rotation_cursor",
     ]
 
     def __init__(self, username, user_agent, password=None, watch_streak_max_parallel=None):
@@ -156,9 +161,15 @@ class Twitch(object):
         )
         self.max_streak_attempts = MAX_STREAK_ATTEMPTS_PER_BROADCAST
         self.streak_watch_seconds = STREAK_MIN_SECONDS
+        self.streak_watch_events_target = STREAK_WATCH_EVENTS_TARGET
+        self.streak_attempt_timeout_seconds = max(
+            STREAK_ATTEMPT_TIMEOUT_SECONDS,
+            self.streak_watch_seconds * 2,
+        )
         self._active_streak_attempts: Dict[str, ActiveWatchStreakAttempt] = {}
         # Track which sessions we've already logged a terminal outcome for
         self._streak_outcomes_logged: set[str] = set()
+        self._streak_rotation_cursor = 0
 
     def login(self):
         if not os.path.isfile(self.cookies_file):
@@ -184,10 +195,14 @@ class Twitch(object):
                 game=stream_info["broadcastSettings"]["game"],
                 tags=stream_info["stream"]["tags"],
                 viewers_count=stream_info["stream"]["viewersCount"],
+                created_at=stream_info["stream"].get("createdAt"),
             )
         except (KeyError, TypeError):
             logger.debug("Invalid stream info for %s", streamer.username)
             return False
+
+        if stream_info.get("watchStreakMissing") is False:
+            streamer.stream.watch_streak_missing = False
 
         event_properties = {
             "channel_id": streamer.channel_id,
@@ -333,6 +348,31 @@ class Twitch(object):
                 "game": game,
             },
         }
+
+        stream_created_at = self._parse_iso8601_timestamp(stream.get("createdAt"))
+        if stream_created_at is None and streamer.channel_id:
+            is_live_request = copy.deepcopy(GQLOperations.WithIsStreamLiveQuery)
+            is_live_request["variables"] = {"id": streamer.channel_id}
+            is_live_response = self.post_gql_request(is_live_request)
+            self._log_gql_errors(is_live_request.get("operationName"), is_live_response)
+            stream_created_at = self._extract_stream_created_timestamp(is_live_response)
+        if stream_created_at is not None:
+            stream_info["stream"]["createdAt"] = stream_created_at
+
+        if streamer.settings.watch_streak is True and streamer.channel_id:
+            reward_list_request = copy.deepcopy(GQLOperations.RewardList)
+            reward_list_request["variables"]["channelID"] = streamer.channel_id
+            reward_response = self.post_gql_request(reward_list_request)
+            self._log_gql_errors(reward_list_request.get("operationName"), reward_response)
+            milestone_achievement_at = self._extract_watch_streak_achievement_timestamp(
+                reward_response
+            )
+            if (
+                milestone_achievement_at is not None
+                and stream_created_at is not None
+                and milestone_achievement_at > stream_created_at
+            ):
+                stream_info["watchStreakMissing"] = False
 
         self._stream_info_cache[cache_key] = {
             "data": stream_info,
@@ -651,6 +691,41 @@ class Twitch(object):
     def _invalidate_stream_info_cache(self, cache_key):
         self._stream_info_cache.pop(cache_key, None)
 
+    def _parse_iso8601_timestamp(self, value):
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+
+    def _extract_stream_created_timestamp(self, response):
+        if not isinstance(response, dict):
+            return None
+        created_at = (
+            response.get("data", {}).get("user", {}).get("stream", {}).get("createdAt")
+        )
+        return self._parse_iso8601_timestamp(created_at)
+
+    def _extract_watch_streak_achievement_timestamp(self, response):
+        if not isinstance(response, dict):
+            return None
+        milestone = (
+            response.get("data", {})
+            .get("channel", {})
+            .get("self", {})
+            .get("watchStreakMilestone")
+        )
+        if not isinstance(milestone, dict):
+            return None
+
+        viewer_milestone = milestone.get("watchStreakMilestone")
+        if not isinstance(viewer_milestone, dict):
+            return None
+        return self._parse_iso8601_timestamp(
+            viewer_milestone.get("achievementTimestamp")
+        )
+
     def _operation_name_from_json_data(self, json_data):
         if isinstance(json_data, dict):
             return json_data.get("operationName", "UnknownOperation")
@@ -849,7 +924,12 @@ class Twitch(object):
                 session = self._ensure_watch_streak_session(streamer, now)
                 eligible = self._session_is_eligible(session, streamer)
                 attempts = session.attempts if session is not None else float("inf")
-                key_parts.append((0 if eligible else 1, attempts))
+                stream_created_at = (
+                    streamer.stream.created_at
+                    if getattr(streamer.stream, "created_at", None) is not None
+                    else now
+                )
+                key_parts.append((0 if eligible else 1, attempts, stream_created_at))
             else:
                 key_parts.append(0)
         return tuple(key_parts)
@@ -1076,8 +1156,28 @@ class Twitch(object):
                 self._log_streak_claimed(session)
                 continue
 
+            watch_rewards_gained = (
+                self._watch_reward_counter(streamer_obj) - attempt.watch_counter_at_start
+            )
+            if watch_rewards_gained >= self.streak_watch_events_target:
+                # 2 WATCH rewards is a more reliable indicator than local watch-time estimates.
+                streamer_obj.stream.watch_streak_missing = False
+                self.watch_streak_cache.mark_ended(
+                    attempt.streamer,
+                    attempt.broadcast_id,
+                    ended_at=now,
+                    account_name=self.account_username,
+                )
+                logger.debug(
+                    "[streak] %s inferred as completed after %d WATCH events for broadcast %s",
+                    attempt.streamer,
+                    watch_rewards_gained,
+                    attempt.broadcast_id,
+                )
+                continue
+
             elapsed = now - attempt.started_at
-            if elapsed < self.streak_watch_seconds:
+            if elapsed < self.streak_attempt_timeout_seconds:
                 remaining[session_key] = attempt
                 continue
 
@@ -1088,37 +1188,6 @@ class Twitch(object):
                 account_name=self.account_username,
                 max_attempts=self.max_streak_attempts,
             )
-            watch_reward_seen = self._watch_reward_counter(streamer_obj) > attempt.watch_counter_at_start
-
-            if streamer_obj.stream.watch_streak_missing is False:
-                session = self.watch_streak_cache.mark_claimed(
-                    attempt.streamer,
-                    broadcast_id=attempt.broadcast_id,
-                    now=now,
-                    account_name=self.account_username,
-                )
-
-            if session.claimed:
-                self._log_streak_claimed(session)
-                continue
-
-            if watch_reward_seen:
-                # We watched long enough to get a WATCH reward but didn't observe a WATCH_STREAK
-                # reward. End streak checks for this broadcast to avoid repeatedly occupying
-                # a watch slot in cases where Twitch won't emit WATCH_STREAK for this session.
-                streamer_obj.stream.watch_streak_missing = False
-                self.watch_streak_cache.mark_ended(
-                    attempt.streamer,
-                    attempt.broadcast_id,
-                    ended_at=now,
-                    account_name=self.account_username,
-                )
-                logger.debug(
-                    "[streak] %s ended after WATCH without WATCH_STREAK for broadcast %s",
-                    attempt.streamer,
-                    attempt.broadcast_id,
-                )
-                continue
 
             if session.attempts >= self.max_streak_attempts:
                 self.watch_streak_cache.mark_ended(
@@ -1163,12 +1232,24 @@ class Twitch(object):
                     streamers, idx, streak_priorities, order_map, now
                 ),
             )
-            for idx in sorted_candidates:
+            available_candidates = [
+                idx
+                for idx in sorted_candidates
+                if streamers[idx].username not in active_streamers
+            ]
+            if available_candidates:
+                offset = self._streak_rotation_cursor % len(available_candidates)
+                rotated_candidates = (
+                    available_candidates[offset:] + available_candidates[:offset]
+                )
+            else:
+                rotated_candidates = []
+
+            added_count = 0
+            for idx in rotated_candidates:
                 if len(active_selection) >= self.max_streak_sessions:
                     break
                 streamer = streamers[idx]
-                if streamer.username in active_streamers:
-                    continue
                 session = self._ensure_watch_streak_session(streamer, now)
                 if session is None or not self._session_is_eligible(session, streamer):
                     continue
@@ -1182,7 +1263,13 @@ class Twitch(object):
                 self._active_streak_attempts[session.key()] = attempt
                 active_streamers.add(streamer.username)
                 active_selection.append(idx)
+                added_count += 1
                 self._log_streak_start(session)
+
+            if available_candidates:
+                self._streak_rotation_cursor = (
+                    self._streak_rotation_cursor + max(1, added_count)
+                ) % len(available_candidates)
 
         return active_selection[: self.max_streak_sessions]
 
