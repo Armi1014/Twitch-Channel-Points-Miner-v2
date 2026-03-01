@@ -373,28 +373,12 @@ class WatchStreakCache:
             presence = self._presence.get(key)
             bootstrap_done = self.bootstrap_done
             offline_gap = self._offline_gap_from_presence(presence) if presence else None
-            seen_offline_online = (
-                presence is not None
-                and presence.last_offline_at is not None
-                and presence.last_online_at is not None
-                and presence.last_online_at >= presence.last_offline_at
-            )
             broadcast_changed = (
                 presence is not None
                 and presence.previous_broadcast_id is not None
                 and presence.last_broadcast_id is not None
                 and presence.previous_broadcast_id != presence.last_broadcast_id
             )
-            if (
-                not broadcast_changed
-                and presence is not None
-                and presence.previous_broadcast_id is None
-                and presence.last_broadcast_id is not None
-                and seen_offline_online
-            ):
-                # We saw an offline->online transition but don't have a prior broadcast id;
-                # treat this as a new broadcast to avoid skipping legitimate streak attempts.
-                broadcast_changed = True
         if presence is None:
             return False
         if not bootstrap_done:
@@ -403,10 +387,13 @@ class WatchStreakCache:
         if offline_gap is None:
             return False
 
+        if offline_gap < MIN_OFFLINE_FOR_NEW_STREAK:
+            return False
+
         if broadcast_changed:
             return True
 
-        return offline_gap >= MIN_OFFLINE_FOR_NEW_STREAK
+        return True
 
     def _prune_stale_sessions(self, now: float, ttl_seconds: int = STALE_SESSION_TTL_SECONDS):
         with self._lock:

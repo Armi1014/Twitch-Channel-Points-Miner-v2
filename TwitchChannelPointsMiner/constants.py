@@ -222,6 +222,15 @@ class GQLOperations:
             }
         },
     }
+    ChatRoomBanStatus = {
+        "operationName": "ChatRoomBanStatus",
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "319f2a9a3ac7ddecd7925944416c14b818b65676ab69da604460b68938d22bea",
+            }
+        },
+    }
     UserPointsContribution = {
         "operationName": "UserPointsContribution",
         "extensions": {

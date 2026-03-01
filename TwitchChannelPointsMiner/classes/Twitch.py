@@ -64,9 +64,12 @@ JsonType = Dict[str, Any]
 STREAMER_INIT_TIMEOUT_PER_STREAMER = 5  # seconds
 STREAM_INFO_CACHE_TTL = 30  # seconds
 GQL_ERROR_LOG_TTL = 60  # seconds
+GQL_REQUEST_WARNING_TTL = 5 * 60  # seconds
 STREAK_MIN_SECONDS = 5 * 60  # Qualifying watch time before attempting a streak
 STREAK_WATCH_EVENTS_TARGET = 2
 STREAK_ATTEMPT_TIMEOUT_SECONDS = 12 * 60
+CLIENT_VERSION_REFRESH_TTL = 10 * 60  # Avoid refetching client version on every GQL call
+CLIENT_VERSION_ERROR_LOG_TTL = 5 * 60
 HTTP_RETRY_ATTEMPTS = 3
 HTTP_RETRY_BACKOFF_BASE = 0.5
 HTTP_RETRY_BACKOFF_CAP = 5.0
@@ -120,6 +123,8 @@ class Twitch(object):
         "_active_streak_attempts",
         "_streak_outcomes_logged",
         "_streak_rotation_cursor",
+        "_client_version_checked_at",
+        "_last_client_version_error_log",
     ]
 
     def __init__(self, username, user_agent, password=None, watch_streak_max_parallel=None):
@@ -170,6 +175,8 @@ class Twitch(object):
         # Track which sessions we've already logged a terminal outcome for
         self._streak_outcomes_logged: set[str] = set()
         self._streak_rotation_cursor = 0
+        self._client_version_checked_at = 0.0
+        self._last_client_version_error_log = 0.0
 
     def login(self):
         if not os.path.isfile(self.cookies_file):
@@ -200,6 +207,8 @@ class Twitch(object):
         except (KeyError, TypeError):
             logger.debug("Invalid stream info for %s", streamer.username)
             return False
+
+        streamer.chat_banned = stream_info.get("chatRoomBanStatus") is not None
 
         if stream_info.get("watchStreakMissing") is False:
             streamer.stream.watch_streak_missing = False
@@ -387,6 +396,25 @@ class Twitch(object):
             ):
                 stream_info["watchStreakMissing"] = False
 
+        viewer_user_id = self.twitch_login.get_user_id()
+        if streamer.channel_id and viewer_user_id is not None:
+            chat_room_ban_request = copy.deepcopy(GQLOperations.ChatRoomBanStatus)
+            chat_room_ban_request["variables"] = {
+                "targetUserID": f"{viewer_user_id}",
+                "channelID": streamer.channel_id,
+            }
+            chat_room_ban_response = self.post_gql_request(chat_room_ban_request)
+            self._log_gql_errors(
+                chat_room_ban_request.get("operationName"),
+                chat_room_ban_response,
+            )
+            if isinstance(chat_room_ban_response, dict):
+                data = chat_room_ban_response.get("data")
+                if isinstance(data, dict):
+                    chat_room_ban_status = data.get("chatRoomBanStatus")
+                    if chat_room_ban_status is not None:
+                        stream_info["chatRoomBanStatus"] = chat_room_ban_status
+
         self._stream_info_cache[cache_key] = {
             "data": stream_info,
             "timestamp": now,
@@ -539,7 +567,13 @@ class Twitch(object):
             self.__chuncked_sleep(random_sleep * 60, chunk_size=chunk_size)
 
     def _is_retryable_connection_setup_error(self, exception):
-        if isinstance(exception, requests.exceptions.ConnectTimeout):
+        if isinstance(
+            exception,
+            (
+                requests.exceptions.ConnectTimeout,
+                requests.exceptions.ReadTimeout,
+            ),
+        ):
             return True
         if not isinstance(exception, requests.exceptions.ConnectionError):
             return False
@@ -798,19 +832,41 @@ class Twitch(object):
                 f"Data: {json_data}, Status code: {response.status_code}, Content: {response.text}"
             )
             if response.status_code < 200 or response.status_code >= 300:
-                logger.warning(
-                    "GQL operation %s returned HTTP status %s",
-                    operation_name,
-                    response.status_code,
-                )
+                key = ("gql_http_status", operation_name, response.status_code)
+                now = time.time()
+                last_logged = self._last_gql_error_log.get(key, 0)
+                if now - last_logged >= GQL_REQUEST_WARNING_TTL:
+                    logger.warning(
+                        "GQL operation %s returned HTTP status %s",
+                        operation_name,
+                        response.status_code,
+                    )
+                    self._last_gql_error_log[key] = now
+                else:
+                    logger.debug(
+                        "GQL operation %s returned HTTP status %s (suppressed)",
+                        operation_name,
+                        response.status_code,
+                    )
             try:
                 return response.json()
             except ValueError:
-                logger.warning(
-                    "Invalid JSON response for %s (status %s)",
-                    operation_name,
-                    response.status_code,
-                )
+                key = ("gql_invalid_json", operation_name, response.status_code)
+                now = time.time()
+                last_logged = self._last_gql_error_log.get(key, 0)
+                if now - last_logged >= GQL_REQUEST_WARNING_TTL:
+                    logger.warning(
+                        "Invalid JSON response for %s (status %s)",
+                        operation_name,
+                        response.status_code,
+                    )
+                    self._last_gql_error_log[key] = now
+                else:
+                    logger.debug(
+                        "Invalid JSON response for %s (status %s) (suppressed)",
+                        operation_name,
+                        response.status_code,
+                    )
                 return {}
         except requests.exceptions.RequestException as e:
             self._log_request_exception(operation_name, str(e))
@@ -873,6 +929,10 @@ class Twitch(object):
             return False"""
 
     def update_client_version(self):
+        now = time.time()
+        if (now - self._client_version_checked_at) < CLIENT_VERSION_REFRESH_TTL:
+            return self.client_version
+
         try:
             response = self._request_with_retry(
                 "GET",
@@ -880,6 +940,7 @@ class Twitch(object):
                 request_name="update_client_version",
                 timeout=20,
             )
+            self._client_version_checked_at = now
             if response.status_code != 200:
                 logger.debug(
                     f"Error with update_client_version: {response.status_code}"
@@ -893,7 +954,13 @@ class Twitch(object):
             logger.debug(f"Client version: {self.client_version}")
             return self.client_version
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error with update_client_version: {e}")
+            if (now - self._last_client_version_error_log) >= CLIENT_VERSION_ERROR_LOG_TTL:
+                logger.warning("Error with update_client_version: %s", e)
+                self._last_client_version_error_log = now
+            else:
+                logger.debug("Error with update_client_version: %s", e)
+            # Avoid retrying this request every single GQL call while Twitch is flaky.
+            self._client_version_checked_at = now
             return self.client_version
 
     def _drop_progress_value(self, streamer):
@@ -1028,6 +1095,14 @@ class Twitch(object):
 
     def _select_streamers_to_watch(self, streamers, streamers_index, priority):
         now = time.time()
+        streamers_index = [
+            idx
+            for idx in streamers_index
+            if getattr(streamers[idx], "channel_points_enabled", True)
+            and not getattr(streamers[idx], "chat_banned", False)
+        ]
+        if not streamers_index:
+            return []
 
         if priority and priority[0] != Priority.STREAK and (
             self._last_selection_was_streak or self._last_streak_selection
@@ -1539,6 +1614,15 @@ class Twitch(object):
             if isinstance(channel, dict)
             else None
         )
+        community_points_settings = (
+            channel.get("communityPointsSettings")
+            if isinstance(channel, dict)
+            else None
+        )
+        if isinstance(community_points_settings, dict):
+            is_enabled = community_points_settings.get("isEnabled")
+            if isinstance(is_enabled, bool):
+                streamer.channel_points_enabled = is_enabled
         if community_points is None:
             return
 

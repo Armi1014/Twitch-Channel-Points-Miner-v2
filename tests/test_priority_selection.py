@@ -41,6 +41,37 @@ class PrioritySelectionTest(unittest.TestCase):
         self.assertEqual(streamers[selection[0]].username, "subscribed_low")
         self.assertEqual(streamers[selection[1]].username, "other_low")
 
+    def test_selection_skips_streamers_without_points_or_with_chat_ban(self):
+        twitch = Twitch("self-check", "ua")
+        priorities = [Priority.ORDER]
+
+        def make_streamer(name):
+            settings = StreamerSettings(
+                watch_streak=False,
+                claim_drops=False,
+                claim_moments=False,
+                make_predictions=False,
+                follow_raid=False,
+                community_goals=False,
+            )
+            streamer = Streamer(name, settings=settings)
+            streamer.channel_points = 100
+            return streamer
+
+        eligible = make_streamer("eligible")
+        no_points = make_streamer("no_points")
+        no_points.channel_points_enabled = False
+        chat_banned = make_streamer("chat_banned")
+        chat_banned.chat_banned = True
+
+        streamers = [eligible, no_points, chat_banned]
+        selection = twitch._select_streamers_to_watch(
+            streamers, [0, 1, 2], priorities
+        )
+
+        self.assertEqual(len(selection), 1)
+        self.assertEqual(streamers[selection[0]].username, "eligible")
+
 
 if __name__ == "__main__":
     unittest.main()

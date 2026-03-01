@@ -82,6 +82,32 @@ class WatchStreakCacheTest(unittest.TestCase):
             self.assertIsNotNone(cache.get_session("streamer-a", "b1"))
             self.assertIsNone(cache.get_session("streamer-b", "b2", account_name="acc_two"))
 
+    def test_short_offline_gap_does_not_create_session_even_if_broadcast_changes(self):
+        now = time.time()
+        cache = WatchStreakCache(default_account_name="tester")
+        cache.mark_bootstrap_done()
+
+        cache.record_online("streamer", "broadcastA", now)
+        cache.record_offline("streamer", now + 5)
+        cache.record_online("streamer", "broadcastB", now + 120)
+
+        self.assertFalse(cache.should_create_session("streamer"))
+
+    def test_long_offline_gap_creates_session_when_broadcast_changes(self):
+        now = time.time()
+        cache = WatchStreakCache(default_account_name="tester")
+        cache.mark_bootstrap_done()
+
+        cache.record_online("streamer", "broadcastA", now)
+        cache.record_offline("streamer", now + 5)
+        cache.record_online(
+            "streamer",
+            "broadcastB",
+            now + 5 + MIN_OFFLINE_FOR_NEW_STREAK + 1,
+        )
+
+        self.assertTrue(cache.should_create_session("streamer"))
+
 
 if __name__ == "__main__":
     unittest.main()
