@@ -108,6 +108,16 @@ class WatchStreakCacheTest(unittest.TestCase):
 
         self.assertTrue(cache.should_create_session("streamer"))
 
+    def test_bootstrap_online_streamer_can_create_initial_session_without_offline_gap(self):
+        now = time.time()
+        cache = WatchStreakCache(default_account_name="tester")
+
+        cache.record_online("streamer", "broadcastA", now)
+        self.assertFalse(cache.should_create_session("streamer"))
+
+        cache.mark_bootstrap_done()
+        self.assertTrue(cache.should_create_session("streamer"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -385,7 +385,10 @@ class WatchStreakCache:
             return False
 
         if offline_gap is None:
-            return False
+            # Startup/restart probe: if the streamer is currently online and we have not
+            # observed an offline transition in this runtime yet, allow creating a session
+            # so missing streaks can be checked without waiting for a future offline gap.
+            return presence.last_online_at is not None and presence.last_offline_at is None
 
         if offline_gap < MIN_OFFLINE_FOR_NEW_STREAK:
             return False

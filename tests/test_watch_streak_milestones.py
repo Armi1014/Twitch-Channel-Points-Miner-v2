@@ -268,6 +268,38 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertNotEqual(first_names, second_names)
         self.assertGreaterEqual(len(set(first_names + second_names)), 3)
 
+    def test_streak_selection_bootstrap_creates_session_for_online_streamer(self):
+        twitch = Twitch("startup-probe-test", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="startup-probe-test")
+        twitch.watch_streak_cache.mark_bootstrap_done()
+        twitch.max_streak_sessions = 1
+        twitch.max_watch_amount = 1
+
+        now = time.time()
+        streamer = self._make_streamer("streamer")
+        streamer.is_online = True
+        streamer.online_at = now - 1200
+        streamer.stream.broadcast_id = "startup-broadcast-1"
+        streamer.stream.created_at = now - 1200
+        streamer.stream.watch_streak_missing = True
+
+        selection = twitch._select_streak_streamers(
+            [streamer],
+            [0],
+            [Priority.STREAK],
+            now,
+        )
+
+        self.assertEqual(selection, [0])
+        session = twitch.watch_streak_cache.get_session(
+            streamer.username,
+            streamer.stream.broadcast_id,
+            account_name=twitch.account_username,
+        )
+        self.assertIsNotNone(session)
+        self.assertFalse(session.claimed)
+        self.assertIsNone(session.ended_at)
+
 
 if __name__ == "__main__":
     unittest.main()
