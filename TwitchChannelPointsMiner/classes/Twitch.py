@@ -1054,7 +1054,9 @@ class Twitch(object):
                 favorite_rank = (
                     0 if getattr(streamer.settings, "favorite", False) is True else 1
                 )
-                key_parts.append((favorite_rank, order_map.get(idx, idx)))
+                # FAVORITE should only split favorite vs non-favorite groups.
+                # Do not inject ORDER here; later priorities must still sort within each group.
+                key_parts.append(favorite_rank)
             elif prior == Priority.STREAK:
                 session = self._ensure_watch_streak_session(streamer, now)
                 eligible = self._session_is_eligible(session, streamer)

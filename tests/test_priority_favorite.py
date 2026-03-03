@@ -15,6 +15,7 @@ class FavoritePriorityTest(unittest.TestCase):
         favorite: bool,
         points: int,
         watch_streak: bool = False,
+        subscribed: bool = False,
     ) -> Streamer:
         settings = StreamerSettings(
             watch_streak=watch_streak,
@@ -27,6 +28,7 @@ class FavoritePriorityTest(unittest.TestCase):
         )
         streamer = Streamer(username, settings=settings)
         streamer.channel_points = points
+        streamer.activeMultipliers = [{"factor": 1}] if subscribed else []
         streamer.is_online = True
         streamer.online_at = time.time() - 180
         streamer.stream.broadcast_id = f"broadcast-{username}"
@@ -50,7 +52,26 @@ class FavoritePriorityTest(unittest.TestCase):
         )
 
         selected_usernames = [streamers[i].username for i in selection]
-        self.assertEqual(selected_usernames, ["fav_high_points", "fav_mid_points"])
+        self.assertEqual(selected_usernames, ["fav_mid_points", "fav_high_points"])
+
+    def test_favorite_priority_without_online_favorites_keeps_next_priorities(self):
+        twitch = Twitch("favorite-no-online", "ua")
+        twitch.max_watch_amount = 2
+
+        streamers = [
+            self._make_streamer("sub_high", favorite=False, subscribed=True, points=300),
+            self._make_streamer("sub_low", favorite=False, subscribed=True, points=100),
+            self._make_streamer("nonsub_lowest", favorite=False, subscribed=False, points=1),
+        ]
+
+        selection = twitch._select_streamers_to_watch(
+            streamers,
+            [0, 1, 2],
+            [Priority.FAVORITE, Priority.SUBSCRIBED, Priority.POINTS_ASCENDING],
+        )
+
+        selected_usernames = [streamers[i].username for i in selection]
+        self.assertEqual(selected_usernames, ["sub_low", "sub_high"])
 
     def test_streak_priority_still_preempts_favorites(self):
         twitch = Twitch("favorite-streak", "ua")
