@@ -227,12 +227,13 @@ class Twitch(object):
                     account_name=self.account_username,
                 )
                 if session is None or session.claimed is False:
-                    self.watch_streak_cache.mark_claimed(
+                    session = self.watch_streak_cache.mark_claimed(
                         streamer.username,
                         broadcast_id=streamer.stream.broadcast_id,
                         now=time.time(),
                         account_name=self.account_username,
                     )
+                    self._log_streak_claimed(session, streamer)
 
         event_properties = {
             "channel_id": streamer.channel_id,
@@ -1266,20 +1267,20 @@ class Twitch(object):
         return 0
 
     def _log_streak_start(self, session: WatchStreakSession):
-        attempt_number = max(1, int(session.attempts) + 1)
-        logger.info(
-            "[STREAK] Checking %s (attempt %d/%d)",
-            session.streamer_login,
-            attempt_number,
-            self.max_streak_attempts,
-        )
+        # Keep attempt-level streak flow quiet to avoid noisy logs on large accounts.
+        return
 
-    def _log_streak_claimed(self, session: WatchStreakSession):
+    def _log_streak_claimed(self, session: WatchStreakSession, streamer=None):
         session_key = session.key()
         if session_key in self._streak_outcomes_logged:
             return
         self._streak_outcomes_logged.add(session_key)
-        logger.info("[STREAK] Completed for %s", session.streamer_login)
+        display_target = streamer if streamer is not None else session.streamer_login
+        logger.info(
+            "Detected WATCH_STREAK for %s",
+            display_target,
+            extra={"emoji": ":rocket:", "event": Events.GAIN_FOR_WATCH_STREAK},
+        )
 
     def _log_streak_failed(self, session: WatchStreakSession):
         session_key = session.key()
@@ -1330,7 +1331,7 @@ class Twitch(object):
                     now=now,
                     account_name=self.account_username,
                 )
-                self._log_streak_claimed(session)
+                self._log_streak_claimed(session, streamer_obj)
                 continue
 
             watch_rewards_gained = (

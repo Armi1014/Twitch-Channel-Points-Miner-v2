@@ -299,7 +299,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(session)
         self.assertFalse(session.claimed)
 
-    def test_streak_start_logs_message(self):
+    def test_streak_start_is_not_logged(self):
         twitch = Twitch("streak-log-start", "ua")
         cache = WatchStreakCache(default_account_name="streak-log-start")
         session = cache.ensure_session(
@@ -312,8 +312,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         with patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
             twitch._log_streak_start(session)
 
-        mocked_info.assert_called_once()
-        self.assertIn("[STREAK] Checking %s", mocked_info.call_args[0][0])
+        mocked_info.assert_not_called()
 
     def test_streak_claimed_logs_once_per_session(self):
         twitch = Twitch("streak-log-claimed", "ua")
@@ -330,7 +329,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             twitch._log_streak_claimed(session)
 
         mocked_info.assert_called_once()
-        self.assertIn("[STREAK] Completed for %s", mocked_info.call_args[0][0])
+        self.assertIn("Detected WATCH_STREAK for %s", mocked_info.call_args[0][0])
 
     def test_streak_failed_logs_once_per_session(self):
         twitch = Twitch("streak-log-failed", "ua")
