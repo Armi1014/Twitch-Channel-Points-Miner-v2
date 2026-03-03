@@ -218,6 +218,7 @@ class Twitch(object):
 
         streamer.chat_banned = stream_info.get("chatRoomBanStatus") is not None
 
+        streak_was_missing = streamer.stream.watch_streak_missing
         if stream_info.get("watchStreakMissing") is False:
             streamer.stream.watch_streak_missing = False
             if self.watch_streak_cache is not None and streamer.stream.broadcast_id:
@@ -233,7 +234,14 @@ class Twitch(object):
                         now=time.time(),
                         account_name=self.account_username,
                     )
+                if streak_was_missing and session is not None:
                     self._log_streak_claimed(session, streamer)
+            elif streak_was_missing:
+                logger.info(
+                    "Detected WATCH_STREAK for %s",
+                    streamer,
+                    extra={"emoji": ":rocket:", "event": Events.GAIN_FOR_WATCH_STREAK},
+                )
 
         event_properties = {
             "channel_id": streamer.channel_id,
