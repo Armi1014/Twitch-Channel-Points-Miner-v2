@@ -82,6 +82,14 @@ RETRYABLE_CONNECTION_SETUP_MARKERS = (
     "getaddrinfo failed",
     "name resolution",
 )
+SUPPRESSED_GQL_SERVICE_TIMEOUT_OPERATIONS = {
+    "VideoPlayerStreamInfoOverlayChannel",
+    "ChannelFollows",
+    "ChatRoomBanStatus",
+    "ChannelPointsContext",
+    "Inventory",
+    "RewardList",
+}
 
 
 @dataclass
@@ -624,6 +632,39 @@ class Twitch(object):
                     )
                 attempt += 1
 
+    def _effective_streak_min_offline_seconds(self) -> int:
+        if self.watch_streak_cache is None:
+            return MIN_OFFLINE_FOR_NEW_STREAK
+        return max(
+            0,
+            int(
+                getattr(
+                    self.watch_streak_cache,
+                    "min_offline_for_new_streak",
+                    MIN_OFFLINE_FOR_NEW_STREAK,
+                )
+            ),
+        )
+
+    def _summarize_gql_error_messages(self, messages) -> tuple[str, bool]:
+        normalized_messages = []
+        service_timeout_count = 0
+        for message in messages:
+            if isinstance(message, str) and "service timeout" in message.lower():
+                service_timeout_count += 1
+            else:
+                normalized_messages.append(message)
+
+        if service_timeout_count == 1:
+            normalized_messages.append("service timeout")
+        elif service_timeout_count > 1:
+            normalized_messages.append(f"service timeout (x{service_timeout_count})")
+
+        if not normalized_messages:
+            normalized_messages.append("Unknown GQL error")
+
+        return "; ".join(normalized_messages), service_timeout_count > 0
+
     def _log_gql_errors(self, operation_name, response):
         if not isinstance(response, dict):
             return False
@@ -631,20 +672,17 @@ class Twitch(object):
         if errors in [[], None]:
             return False
         messages = []
-        has_service_timeout = False
         for error in errors:
             if isinstance(error, dict):
                 message = error.get("message", str(error))
             else:
                 message = str(error)
             messages.append(message)
-            if isinstance(message, str) and "service timeout" in message.lower():
-                has_service_timeout = True
-        message = "; ".join(messages) if messages else "Unknown GQL error"
-        if has_service_timeout and operation_name in [
-            "VideoPlayerStreamInfoOverlayChannel",
-            "ChannelFollows",
-        ]:
+        message, has_service_timeout = self._summarize_gql_error_messages(messages)
+        if (
+            has_service_timeout
+            and operation_name in SUPPRESSED_GQL_SERVICE_TIMEOUT_OPERATIONS
+        ):
             logger.debug(
                 "GQL operation %s returned service timeout (suppressed): %s",
                 operation_name,
@@ -1158,13 +1196,18 @@ class Twitch(object):
     def _ensure_watch_streak_session(self, streamer, now: float) -> Optional[WatchStreakSession]:
         if self.watch_streak_cache is None:
             return None
+        min_offline_for_new_streak = self._effective_streak_min_offline_seconds()
         broadcast_id, started_at, synthetic = self._resolve_broadcast_identity(streamer, now)
         offline_gap = self._offline_gap_seconds(streamer)
         latest_session = self.watch_streak_cache.latest_session_for_streamer(
             streamer.username, account_name=self.account_username
         )
 
-        if synthetic and offline_gap is not None and offline_gap < MIN_OFFLINE_FOR_NEW_STREAK:
+        if (
+            synthetic
+            and offline_gap is not None
+            and offline_gap < min_offline_for_new_streak
+        ):
             if latest_session:
                 broadcast_id = latest_session.broadcast_id
                 started_at = latest_session.started_at
@@ -1187,7 +1230,7 @@ class Twitch(object):
             latest_session
             and latest_session.broadcast_id == broadcast_id
             and offline_gap is not None
-            and offline_gap < MIN_OFFLINE_FOR_NEW_STREAK
+            and offline_gap < min_offline_for_new_streak
         ):
             return latest_session
 

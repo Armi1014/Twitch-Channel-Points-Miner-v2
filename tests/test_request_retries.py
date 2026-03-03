@@ -181,6 +181,38 @@ class RequestRetryTest(unittest.TestCase):
         # First call emits 2 warnings (HTTP status + invalid JSON), second call is suppressed.
         self.assertEqual(mocked_warning.call_count, 2)
 
+    def test_log_gql_errors_suppresses_chat_room_ban_status_service_timeout(self):
+        response = {"errors": [{"message": "service timeout"}]}
+
+        with patch(
+            "TwitchChannelPointsMiner.classes.Twitch.logger.warning"
+        ) as mocked_warning, patch(
+            "TwitchChannelPointsMiner.classes.Twitch.logger.debug"
+        ) as mocked_debug:
+            handled = self.twitch._log_gql_errors("ChatRoomBanStatus", response)
+
+        self.assertTrue(handled)
+        mocked_warning.assert_not_called()
+        mocked_debug.assert_called_once()
+
+    def test_log_gql_errors_compacts_repeated_service_timeout_messages(self):
+        response = {
+            "errors": [
+                {"message": "service timeout"},
+                {"message": "service timeout"},
+                {"message": "service timeout"},
+            ]
+        }
+
+        with patch(
+            "TwitchChannelPointsMiner.classes.Twitch.logger.warning"
+        ) as mocked_warning:
+            handled = self.twitch._log_gql_errors("SomeCriticalOperation", response)
+
+        self.assertTrue(handled)
+        mocked_warning.assert_called_once()
+        self.assertIn("service timeout (x3)", mocked_warning.call_args[0][2])
+
 
 if __name__ == "__main__":
     unittest.main()

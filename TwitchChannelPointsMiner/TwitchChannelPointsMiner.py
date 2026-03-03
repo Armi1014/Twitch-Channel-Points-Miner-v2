@@ -25,7 +25,10 @@ from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
 from TwitchChannelPointsMiner.constants import FORK_OWNER, GITHUB_REPO_URL
 from TwitchChannelPointsMiner.logger import LoggerSettings, configure_loggers
-from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
+from TwitchChannelPointsMiner.WatchStreakCache import (
+    MIN_OFFLINE_FOR_NEW_STREAK,
+    WatchStreakCache,
+)
 from TwitchChannelPointsMiner.utils import (
     _millify,
     at_least_one_value_in_settings_is,
@@ -77,6 +80,7 @@ class TwitchChannelPointsMiner:
         "watch_streak_cache_path",
         "watch_streak_cache",
         "watch_streak_max_parallel",
+        "watch_streak_min_offline_seconds",
     ]
 
     def __init__(
@@ -94,6 +98,7 @@ class TwitchChannelPointsMiner:
         # Default values for all streamers
         streamer_settings: StreamerSettings = StreamerSettings(),
         watch_streak_max_parallel: int | None = None,
+        watch_streak_min_offline_seconds: int = MIN_OFFLINE_FOR_NEW_STREAK,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -148,6 +153,9 @@ class TwitchChannelPointsMiner:
             if watch_streak_max_parallel is not None
             else None
         )
+        self.watch_streak_min_offline_seconds = max(
+            0, int(watch_streak_min_offline_seconds)
+        )
         self.twitch = Twitch(
             self.username, user_agent, password, self.watch_streak_max_parallel
         )
@@ -175,6 +183,7 @@ class TwitchChannelPointsMiner:
             initial_cache_load_path,
             default_account_name=self.username,
             account_filter=self.username,
+            min_offline_for_new_streak=self.watch_streak_min_offline_seconds,
         )
         self.twitch.watch_streak_cache = self.watch_streak_cache
         if priority is None:
@@ -287,6 +296,7 @@ class TwitchChannelPointsMiner:
                 self.watch_streak_cache_path,
                 default_account_name=self.username,
                 account_filter=self.username,
+                min_offline_for_new_streak=self.watch_streak_min_offline_seconds,
             )
             self.twitch.watch_streak_cache = self.watch_streak_cache
 

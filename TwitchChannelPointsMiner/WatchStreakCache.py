@@ -76,9 +76,11 @@ class WatchStreakCache:
         self,
         sessions: Dict[str, WatchStreakSession] | None = None,
         default_account_name: str | None = None,
+        min_offline_for_new_streak: int = MIN_OFFLINE_FOR_NEW_STREAK,
     ):
         self._sessions: Dict[str, WatchStreakSession] = sessions or {}
         self.default_account_name = default_account_name
+        self.min_offline_for_new_streak = max(0, int(min_offline_for_new_streak))
         self._lock = threading.Lock()
         self._dirty = False
         self._presence: Dict[str, StreamerPresence] = {}
@@ -90,6 +92,7 @@ class WatchStreakCache:
         path: str,
         default_account_name: str | None = None,
         account_filter: str | None = None,
+        min_offline_for_new_streak: int = MIN_OFFLINE_FOR_NEW_STREAK,
     ) -> "WatchStreakCache":
         raw_data: Dict[str, object] = {}
         if not os.path.isfile(path):
@@ -135,7 +138,11 @@ class WatchStreakCache:
                 len(raw_data),
             )
 
-        cache = cls(sessions, default_account_name)
+        cache = cls(
+            sessions,
+            default_account_name,
+            min_offline_for_new_streak=min_offline_for_new_streak,
+        )
         cache._prune_stale_sessions(time.time())
         logger.debug(
             "WatchStreakCache: loaded %d sessions from %s",
@@ -390,7 +397,7 @@ class WatchStreakCache:
             # so missing streaks can be checked without waiting for a future offline gap.
             return presence.last_online_at is not None and presence.last_offline_at is None
 
-        if offline_gap < MIN_OFFLINE_FOR_NEW_STREAK:
+        if offline_gap < self.min_offline_for_new_streak:
             return False
 
         if broadcast_changed:
