@@ -313,7 +313,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             twitch._log_streak_start(session)
 
         mocked_info.assert_called_once()
-        self.assertIn("[streak] checking %s", mocked_info.call_args[0][0])
+        self.assertIn("[STREAK] Checking %s", mocked_info.call_args[0][0])
 
     def test_streak_claimed_logs_once_per_session(self):
         twitch = Twitch("streak-log-claimed", "ua")
@@ -330,7 +330,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             twitch._log_streak_claimed(session)
 
         mocked_info.assert_called_once()
-        self.assertIn("[streak] completed for %s", mocked_info.call_args[0][0])
+        self.assertIn("[STREAK] Completed for %s", mocked_info.call_args[0][0])
 
     def test_streak_failed_logs_once_per_session(self):
         twitch = Twitch("streak-log-failed", "ua")
@@ -348,7 +348,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             twitch._log_streak_failed(session)
 
         mocked_info.assert_called_once()
-        self.assertIn("[streak] exhausted for %s after %d attempts", mocked_info.call_args[0][0])
+        self.assertIn("[STREAK] Exhausted for %s after %d attempts", mocked_info.call_args[0][0])
         self.assertIsNone(session.ended_at)
 
 

@@ -1268,7 +1268,7 @@ class Twitch(object):
     def _log_streak_start(self, session: WatchStreakSession):
         attempt_number = max(1, int(session.attempts) + 1)
         logger.info(
-            "[streak] checking %s (attempt %d/%d)",
+            "[STREAK] Checking %s (attempt %d/%d)",
             session.streamer_login,
             attempt_number,
             self.max_streak_attempts,
@@ -1279,7 +1279,7 @@ class Twitch(object):
         if session_key in self._streak_outcomes_logged:
             return
         self._streak_outcomes_logged.add(session_key)
-        logger.info("[streak] completed for %s", session.streamer_login)
+        logger.info("[STREAK] Completed for %s", session.streamer_login)
 
     def _log_streak_failed(self, session: WatchStreakSession):
         session_key = session.key()
@@ -1287,7 +1287,7 @@ class Twitch(object):
             return
         self._streak_outcomes_logged.add(session_key)
         logger.info(
-            "[streak] exhausted for %s after %d attempts",
+            "[STREAK] Exhausted for %s after %d attempts",
             session.streamer_login,
             session.attempts,
         )
