@@ -311,6 +311,43 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         mocked_info.assert_called_once()
         self.assertIn("Detected WATCH_STREAK for %s", mocked_info.call_args[0][0])
 
+    def test_update_stream_startup_probe_skips_detected_log_when_reward_seen(self):
+        twitch = Twitch("milestone-startup-no-duplicate", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-startup-no-duplicate")
+        streamer = self._make_streamer("streamer")
+        Settings.logger = SimpleNamespace(less=True)
+
+        now = time.time()
+        streamer.stream.broadcast_id = "broadcast-startup-no-duplicate-1"
+        streamer.stream.watch_streak_missing = False
+        streamer.history["WATCH_STREAK"] = {"counter": 1, "amount": 450}
+
+        twitch.watch_streak_cache.ensure_session(
+            streamer.username,
+            "broadcast-startup-no-duplicate-1",
+            started_at=now - 300,
+            account_name=twitch.account_username,
+        )
+        twitch.watch_streak_cache.mark_claimed(
+            streamer.username,
+            broadcast_id="broadcast-startup-no-duplicate-1",
+            now=now - 120,
+            account_name=twitch.account_username,
+        )
+
+        with patch.object(
+            Twitch,
+            "get_stream_info",
+            return_value=self._stream_info_payload(
+                "broadcast-startup-no-duplicate-1",
+                watch_streak_missing=False,
+            ),
+        ), patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+            updated = twitch.update_stream(streamer)
+
+        self.assertTrue(updated)
+        mocked_info.assert_not_called()
+
     def test_update_stream_runtime_does_not_relog_detected_streak(self):
         twitch = Twitch("milestone-runtime-no-relog", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-runtime-no-relog")

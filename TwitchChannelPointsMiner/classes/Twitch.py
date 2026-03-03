@@ -225,7 +225,14 @@ class Twitch(object):
         )
         if stream_info.get("watchStreakMissing") is False:
             streamer.stream.watch_streak_missing = False
-            should_log_detected = streak_was_missing or startup_streak_probe
+            watch_streak_history = streamer.history.get("WATCH_STREAK", {})
+            has_runtime_watch_streak_reward = (
+                isinstance(watch_streak_history, dict)
+                and int(watch_streak_history.get("counter", 0) or 0) > 0
+            )
+            should_log_detected = streak_was_missing or (
+                startup_streak_probe and not has_runtime_watch_streak_reward
+            )
             if self.watch_streak_cache is not None and streamer.stream.broadcast_id:
                 session = self.watch_streak_cache.get_session(
                     streamer.username,
