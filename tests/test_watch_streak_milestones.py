@@ -371,6 +371,18 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(session)
         self.assertFalse(session.claimed)
 
+    def test_set_online_does_not_reset_detected_streak_state(self):
+        streamer = self._make_streamer("streamer")
+        Settings.logger = SimpleNamespace(less=True)
+        streamer.is_online = False
+        streamer.stream.broadcast_id = "broadcast-state-1"
+        streamer.stream.watch_streak_missing = False
+
+        streamer.set_online()
+
+        self.assertTrue(streamer.is_online)
+        self.assertFalse(streamer.stream.watch_streak_missing)
+
     def test_streak_start_is_not_logged(self):
         twitch = Twitch("streak-log-start", "ua")
         cache = WatchStreakCache(default_account_name="streak-log-start")

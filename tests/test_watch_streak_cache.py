@@ -131,6 +131,84 @@ class WatchStreakCacheTest(unittest.TestCase):
 
         self.assertTrue(cache.should_create_session("streamer"))
 
+    def test_streamer_status_saved_and_loaded(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "watch_streak_cache.json")
+            now = time.time()
+            cache = WatchStreakCache(default_account_name="acc_one")
+            cache.set_streamer_status(
+                "online_detected",
+                watch_streak_detected=True,
+                is_online=True,
+                broadcast_id="broadcast-1",
+                checked_at=now,
+            )
+            cache.set_streamer_status(
+                "offline_missing",
+                watch_streak_detected=False,
+                is_online=False,
+                broadcast_id=None,
+                checked_at=now,
+            )
+            cache.save_to_disk_if_dirty(path)
+
+            loaded = WatchStreakCache.load_from_disk(
+                path,
+                default_account_name="acc_one",
+                account_filter="acc_one",
+            )
+            online = loaded.get_streamer_status("online_detected")
+            offline = loaded.get_streamer_status("offline_missing")
+
+            self.assertIsNotNone(online)
+            self.assertTrue(online.watch_streak_detected)
+            self.assertTrue(online.is_online)
+            self.assertEqual(online.broadcast_id, "broadcast-1")
+
+            self.assertIsNotNone(offline)
+            self.assertFalse(offline.watch_streak_detected)
+            self.assertFalse(offline.is_online)
+            self.assertIsNone(offline.broadcast_id)
+
+    def test_streamer_statuses_respect_account_filter(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "watch_streak_cache.json")
+            payload = {
+                "version": 3,
+                "sessions": [],
+                "streamer_statuses": [
+                    {
+                        "account_name": "acc_one",
+                        "streamer_login": "streamer-a",
+                        "watch_streak_detected": True,
+                        "is_online": True,
+                        "broadcast_id": "a1",
+                        "checked_at": 1,
+                    },
+                    {
+                        "account_name": "acc_two",
+                        "streamer_login": "streamer-b",
+                        "watch_streak_detected": False,
+                        "is_online": False,
+                        "broadcast_id": None,
+                        "checked_at": 2,
+                    },
+                ],
+            }
+            with open(path, "w", encoding="utf-8") as file_obj:
+                json.dump(payload, file_obj)
+
+            cache = WatchStreakCache.load_from_disk(
+                path,
+                default_account_name="acc_one",
+                account_filter="acc_one",
+            )
+            self.assertIsNotNone(cache.get_streamer_status("streamer-a"))
+            self.assertIsNone(
+                cache.get_streamer_status("streamer-b", account_name="acc_two")
+            )
+
+
 
 if __name__ == "__main__":
     unittest.main()

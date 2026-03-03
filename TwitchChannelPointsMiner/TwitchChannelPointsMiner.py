@@ -405,7 +405,27 @@ class TwitchChannelPointsMiner:
                     return
 
             if self.watch_streak_cache is not None:
+                snapshot_now = time.time()
+                for streamer in self.streamers:
+                    self.watch_streak_cache.set_streamer_status(
+                        streamer.username,
+                        watch_streak_detected=(
+                            streamer.settings.watch_streak is True
+                            and streamer.stream.watch_streak_missing is False
+                        ),
+                        is_online=bool(streamer.is_online),
+                        broadcast_id=(
+                            streamer.stream.broadcast_id if streamer.is_online else None
+                        ),
+                        checked_at=snapshot_now,
+                        account_name=self.username,
+                    )
+
                 self.watch_streak_cache.mark_bootstrap_done()
+                # Persist startup snapshot so long streamer lists can resume reliably after restart.
+                self.watch_streak_cache.save_to_disk_if_dirty(
+                    self.watch_streak_cache_path
+                )
 
             self.original_streamers = [
                 streamer.channel_points for streamer in self.streamers

@@ -169,6 +169,14 @@ class Streamer(object):
                         ended_at=self.offline_at,
                         account_name=self.watch_streak_account,
                     )
+            self.watch_streak_cache.set_streamer_status(
+                self.username,
+                watch_streak_detected=False,
+                is_online=False,
+                broadcast_id=None,
+                checked_at=self.offline_at,
+                account_name=self.watch_streak_account,
+            )
 
         self.toggle_chat()
 
@@ -187,7 +195,8 @@ class Streamer(object):
             self.online_at = time.time()
             self.is_online = True
             state_changed = True
-            self.stream.init_watch_streak()
+            if self.stream.broadcast_id in [None, ""]:
+                self.stream.init_watch_streak()
             if (
                 self.watch_streak_cache is not None
                 and self.watch_streak_account
@@ -197,6 +206,17 @@ class Streamer(object):
                     self.username,
                     self.stream.broadcast_id,
                     self.online_at,
+                    account_name=self.watch_streak_account,
+                )
+                self.watch_streak_cache.set_streamer_status(
+                    self.username,
+                    watch_streak_detected=(
+                        self.settings.watch_streak is True
+                        and self.stream.watch_streak_missing is False
+                    ),
+                    is_online=True,
+                    broadcast_id=self.stream.broadcast_id,
+                    checked_at=self.online_at,
                     account_name=self.watch_streak_account,
                 )
 
@@ -238,6 +258,14 @@ class Streamer(object):
                     self.username,
                     broadcast_id=self.stream.broadcast_id,
                     now=time.time(),
+                    account_name=self.watch_streak_account,
+                )
+                self.watch_streak_cache.set_streamer_status(
+                    self.username,
+                    watch_streak_detected=True,
+                    is_online=bool(self.is_online),
+                    broadcast_id=self.stream.broadcast_id,
+                    checked_at=time.time(),
                     account_name=self.watch_streak_account,
                 )
                 if self.watch_streak_cache_path:

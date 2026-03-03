@@ -243,6 +243,19 @@ class Twitch(object):
                     extra={"emoji": ":rocket:", "event": Events.GAIN_FOR_WATCH_STREAK},
                 )
 
+        if self.watch_streak_cache is not None:
+            self.watch_streak_cache.set_streamer_status(
+                streamer.username,
+                watch_streak_detected=(
+                    streamer.settings.watch_streak is True
+                    and streamer.stream.watch_streak_missing is False
+                ),
+                is_online=True,
+                broadcast_id=streamer.stream.broadcast_id,
+                checked_at=time.time(),
+                account_name=self.account_username,
+            )
+
         event_properties = {
             "channel_id": streamer.channel_id,
             "broadcast_id": streamer.stream.broadcast_id,
@@ -1284,6 +1297,26 @@ class Twitch(object):
             return
         self._streak_outcomes_logged.add(session_key)
         display_target = streamer if streamer is not None else session.streamer_login
+
+        if self.watch_streak_cache is not None:
+            streamer_login = session.streamer_login
+            is_online = True
+            broadcast_id = session.broadcast_id
+            if streamer is not None:
+                streamer_login = getattr(streamer, "username", streamer_login)
+                is_online = bool(getattr(streamer, "is_online", True))
+                streamer_stream = getattr(streamer, "stream", None)
+                if streamer_stream is not None:
+                    broadcast_id = getattr(streamer_stream, "broadcast_id", broadcast_id)
+            self.watch_streak_cache.set_streamer_status(
+                streamer_login,
+                watch_streak_detected=True,
+                is_online=is_online,
+                broadcast_id=broadcast_id,
+                checked_at=time.time(),
+                account_name=self.account_username,
+            )
+
         logger.info(
             "Detected WATCH_STREAK for %s",
             display_target,
@@ -1295,6 +1328,15 @@ class Twitch(object):
         if session_key in self._streak_outcomes_logged:
             return
         self._streak_outcomes_logged.add(session_key)
+        if self.watch_streak_cache is not None:
+            self.watch_streak_cache.set_streamer_status(
+                session.streamer_login,
+                watch_streak_detected=False,
+                is_online=True,
+                broadcast_id=session.broadcast_id,
+                checked_at=time.time(),
+                account_name=self.account_username,
+            )
         logger.info(
             "[STREAK] Exhausted for %s after %d attempts",
             session.streamer_login,

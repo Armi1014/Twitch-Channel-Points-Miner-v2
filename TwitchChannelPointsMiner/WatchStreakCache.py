@@ -10,7 +10,7 @@ from TwitchChannelPointsMiner.utils import dump_json
 
 logger = logging.getLogger(__name__)
 
-WATCH_STREAK_CACHE_VERSION = 2
+WATCH_STREAK_CACHE_VERSION = 3
 MIN_OFFLINE_FOR_NEW_STREAK = 30 * 60  # 30 minutes
 MAX_STREAK_ATTEMPTS_PER_BROADCAST = 2
 STALE_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60  # drop ended sessions after a week
@@ -71,12 +71,53 @@ class StreamerPresence:
     seen_online: bool = False
 
 
+@dataclass
+class StreamerWatchStreakStatus:
+    account_name: str
+    streamer_login: str
+    watch_streak_detected: bool = False
+    is_online: bool = False
+    broadcast_id: str | None = None
+    checked_at: float | None = None
+
+    def key(self) -> str:
+        return f"{self.account_name}:{self.streamer_login}"
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "account_name": self.account_name,
+            "streamer_login": self.streamer_login,
+            "watch_streak_detected": self.watch_streak_detected,
+            "is_online": self.is_online,
+            "broadcast_id": self.broadcast_id,
+            "checked_at": self.checked_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "StreamerWatchStreakStatus":
+        return cls(
+            account_name=str(data.get("account_name", "")),
+            streamer_login=str(data.get("streamer_login", "")),
+            watch_streak_detected=bool(data.get("watch_streak_detected", False)),
+            is_online=bool(data.get("is_online", False)),
+            broadcast_id=(
+                str(data.get("broadcast_id"))
+                if data.get("broadcast_id") not in [None, ""]
+                else None
+            ),
+            checked_at=(
+                float(data["checked_at"]) if data.get("checked_at") not in [None, ""] else None
+            ),
+        )
+
+
 class WatchStreakCache:
     def __init__(
         self,
         sessions: Dict[str, WatchStreakSession] | None = None,
         default_account_name: str | None = None,
         min_offline_for_new_streak: int = MIN_OFFLINE_FOR_NEW_STREAK,
+        streamer_statuses: Dict[str, StreamerWatchStreakStatus] | None = None,
     ):
         self._sessions: Dict[str, WatchStreakSession] = sessions or {}
         self.default_account_name = default_account_name
@@ -84,6 +125,9 @@ class WatchStreakCache:
         self._lock = threading.Lock()
         self._dirty = False
         self._presence: Dict[str, StreamerPresence] = {}
+        self._streamer_statuses: Dict[str, StreamerWatchStreakStatus] = (
+            streamer_statuses or {}
+        )
         self.bootstrap_done: bool = False
 
     @classmethod
@@ -113,6 +157,7 @@ class WatchStreakCache:
                 raw_data = {}
 
         sessions: Dict[str, WatchStreakSession] = {}
+        streamer_statuses: Dict[str, StreamerWatchStreakStatus] = {}
         normalized_account_filter = (
             account_filter.lower() if isinstance(account_filter, str) else None
         )
@@ -138,10 +183,27 @@ class WatchStreakCache:
                 len(raw_data),
             )
 
+        if isinstance(raw_data, dict) and isinstance(raw_data.get("streamer_statuses"), list):
+            for raw_status in raw_data.get("streamer_statuses", []):
+                if not isinstance(raw_status, dict):
+                    continue
+                try:
+                    status = StreamerWatchStreakStatus.from_dict(raw_status)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.debug("Skipping invalid watch streak status: %s", exc)
+                    continue
+                if not status.account_name or not status.streamer_login:
+                    continue
+                if normalized_account_filter is not None:
+                    if status.account_name.lower() != normalized_account_filter:
+                        continue
+                streamer_statuses[status.key()] = status
+
         cache = cls(
             sessions,
             default_account_name,
             min_offline_for_new_streak=min_offline_for_new_streak,
+            streamer_statuses=streamer_statuses,
         )
         cache._prune_stale_sessions(time.time())
         logger.debug(
@@ -165,6 +227,61 @@ class WatchStreakCache:
 
     def _session_key(self, account_name: str, streamer_login: str, broadcast_id: str) -> str:
         return f"{account_name}:{streamer_login}:{broadcast_id}"
+
+    def _status_key(self, account_name: str, streamer_login: str) -> str:
+        return f"{account_name}:{streamer_login}"
+
+    def get_streamer_status(
+        self, streamer_login: str, account_name: str | None = None
+    ) -> Optional[StreamerWatchStreakStatus]:
+        account = self._resolve_account(account_name)
+        key = self._status_key(account, streamer_login)
+        with self._lock:
+            return self._streamer_statuses.get(key)
+
+    def set_streamer_status(
+        self,
+        streamer_login: str,
+        watch_streak_detected: bool,
+        is_online: bool,
+        broadcast_id: str | None = None,
+        checked_at: float | None = None,
+        account_name: str | None = None,
+    ) -> StreamerWatchStreakStatus:
+        account = self._resolve_account(account_name)
+        checked_at = time.time() if checked_at is None else checked_at
+        key = self._status_key(account, streamer_login)
+        normalized_broadcast_id = (
+            str(broadcast_id) if broadcast_id not in [None, ""] else None
+        )
+        with self._lock:
+            status = self._streamer_statuses.get(key)
+            if status is None:
+                status = StreamerWatchStreakStatus(
+                    account_name=account,
+                    streamer_login=streamer_login,
+                    watch_streak_detected=bool(watch_streak_detected),
+                    is_online=bool(is_online),
+                    broadcast_id=normalized_broadcast_id,
+                    checked_at=checked_at,
+                )
+                self._streamer_statuses[key] = status
+                self._dirty = True
+                return status
+
+            changed = (
+                status.watch_streak_detected != bool(watch_streak_detected)
+                or status.is_online != bool(is_online)
+                or status.broadcast_id != normalized_broadcast_id
+                or status.checked_at != checked_at
+            )
+            if changed:
+                status.watch_streak_detected = bool(watch_streak_detected)
+                status.is_online = bool(is_online)
+                status.broadcast_id = normalized_broadcast_id
+                status.checked_at = checked_at
+                self._dirty = True
+            return status
 
     def latest_session_for_streamer(
         self, streamer_login: str, account_name: str | None = None
@@ -424,8 +541,16 @@ class WatchStreakCache:
             data = {
                 "version": WATCH_STREAK_CACHE_VERSION,
                 "sessions": [session.to_dict() for session in self._sessions.values()],
+                "streamer_statuses": [
+                    status.to_dict() for status in self._streamer_statuses.values()
+                ],
             }
             dump_json(path, data)
             self._dirty = False
-        logger.debug("WatchStreakCache: saved %d sessions to %s", len(self._sessions), path)
+        logger.debug(
+            "WatchStreakCache: saved %d sessions and %d streamer statuses to %s",
+            len(self._sessions),
+            len(self._streamer_statuses),
+            path,
+        )
 
