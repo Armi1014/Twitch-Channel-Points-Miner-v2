@@ -24,6 +24,20 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         streamer.channel_id = "123456"
         return streamer
 
+    def _stream_info_payload(
+        self,
+        broadcast_id: str,
+        watch_streak_missing: bool | None = None,
+    ) -> dict:
+        payload = {
+            "stream": {"id": broadcast_id, "tags": [], "viewersCount": 21},
+            "broadcastSettings": {"title": "title", "game": {}},
+            "chatRoomBanStatus": None,
+        }
+        if watch_streak_missing is not None:
+            payload["watchStreakMissing"] = watch_streak_missing
+        return payload
+
     def test_extract_stream_created_timestamp_handles_null_nodes(self):
         twitch = Twitch("stream-created-null", "ua")
         self.assertIsNone(twitch._extract_stream_created_timestamp({"data": {"user": None}}))
@@ -259,6 +273,80 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertFalse(streamer.stream.watch_streak_missing)
         mocked_info.assert_called_once()
         self.assertIn("Detected WATCH_STREAK for %s", mocked_info.call_args[0][0])
+
+    def test_update_stream_startup_probe_logs_detected_when_already_marked(self):
+        twitch = Twitch("milestone-startup-probe", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-startup-probe")
+        streamer = self._make_streamer("streamer")
+        Settings.logger = SimpleNamespace(less=True)
+
+        now = time.time()
+        streamer.stream.broadcast_id = "broadcast-startup-probe-1"
+        streamer.stream.watch_streak_missing = False
+
+        twitch.watch_streak_cache.ensure_session(
+            streamer.username,
+            "broadcast-startup-probe-1",
+            started_at=now - 300,
+            account_name=twitch.account_username,
+        )
+        twitch.watch_streak_cache.mark_claimed(
+            streamer.username,
+            broadcast_id="broadcast-startup-probe-1",
+            now=now - 120,
+            account_name=twitch.account_username,
+        )
+
+        with patch.object(
+            Twitch,
+            "get_stream_info",
+            return_value=self._stream_info_payload(
+                "broadcast-startup-probe-1",
+                watch_streak_missing=False,
+            ),
+        ), patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+            updated = twitch.update_stream(streamer)
+
+        self.assertTrue(updated)
+        mocked_info.assert_called_once()
+        self.assertIn("Detected WATCH_STREAK for %s", mocked_info.call_args[0][0])
+
+    def test_update_stream_runtime_does_not_relog_detected_streak(self):
+        twitch = Twitch("milestone-runtime-no-relog", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-runtime-no-relog")
+        twitch.watch_streak_cache.mark_bootstrap_done()
+        streamer = self._make_streamer("streamer")
+        Settings.logger = SimpleNamespace(less=True)
+
+        now = time.time()
+        streamer.stream.broadcast_id = "broadcast-runtime-no-relog-1"
+        streamer.stream.watch_streak_missing = False
+
+        twitch.watch_streak_cache.ensure_session(
+            streamer.username,
+            "broadcast-runtime-no-relog-1",
+            started_at=now - 300,
+            account_name=twitch.account_username,
+        )
+        twitch.watch_streak_cache.mark_claimed(
+            streamer.username,
+            broadcast_id="broadcast-runtime-no-relog-1",
+            now=now - 120,
+            account_name=twitch.account_username,
+        )
+
+        with patch.object(
+            Twitch,
+            "get_stream_info",
+            return_value=self._stream_info_payload(
+                "broadcast-runtime-no-relog-1",
+                watch_streak_missing=False,
+            ),
+        ), patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+            updated = twitch.update_stream(streamer)
+
+        self.assertTrue(updated)
+        mocked_info.assert_not_called()
 
     def test_cleanup_ends_attempt_after_two_watch_events(self):
         twitch = Twitch("watch-events-test", "ua")
