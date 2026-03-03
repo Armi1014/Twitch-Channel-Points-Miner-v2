@@ -298,6 +298,57 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         )
         self.assertIsNotNone(session)
         self.assertFalse(session.claimed)
+
+    def test_streak_start_logs_message(self):
+        twitch = Twitch("streak-log-start", "ua")
+        cache = WatchStreakCache(default_account_name="streak-log-start")
+        session = cache.ensure_session(
+            "streamer",
+            "broadcast-log-1",
+            started_at=time.time(),
+            account_name="streak-log-start",
+        )
+
+        with patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+            twitch._log_streak_start(session)
+
+        mocked_info.assert_called_once()
+        self.assertIn("[streak] checking %s", mocked_info.call_args[0][0])
+
+    def test_streak_claimed_logs_once_per_session(self):
+        twitch = Twitch("streak-log-claimed", "ua")
+        cache = WatchStreakCache(default_account_name="streak-log-claimed")
+        session = cache.ensure_session(
+            "streamer",
+            "broadcast-log-2",
+            started_at=time.time(),
+            account_name="streak-log-claimed",
+        )
+
+        with patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+            twitch._log_streak_claimed(session)
+            twitch._log_streak_claimed(session)
+
+        mocked_info.assert_called_once()
+        self.assertIn("[streak] completed for %s", mocked_info.call_args[0][0])
+
+    def test_streak_failed_logs_once_per_session(self):
+        twitch = Twitch("streak-log-failed", "ua")
+        cache = WatchStreakCache(default_account_name="streak-log-failed")
+        session = cache.ensure_session(
+            "streamer",
+            "broadcast-log-3",
+            started_at=time.time(),
+            account_name="streak-log-failed",
+        )
+        session.attempts = 2
+
+        with patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+            twitch._log_streak_failed(session)
+            twitch._log_streak_failed(session)
+
+        mocked_info.assert_called_once()
+        self.assertIn("[streak] exhausted for %s after %d attempts", mocked_info.call_args[0][0])
         self.assertIsNone(session.ended_at)
 
 
