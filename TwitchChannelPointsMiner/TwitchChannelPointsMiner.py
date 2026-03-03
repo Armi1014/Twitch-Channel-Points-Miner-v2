@@ -10,9 +10,12 @@ import sys
 import threading
 import time
 import uuid
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
@@ -81,6 +84,10 @@ class TwitchChannelPointsMiner:
         "watch_streak_cache",
         "watch_streak_max_parallel",
         "watch_streak_min_offline_seconds",
+        "streamers_export_path",
+        "streamers_export_thread",
+        "streamers_export_interval_seconds",
+        "streamer_follow_dates",
     ]
 
     def __init__(
@@ -168,6 +175,12 @@ class TwitchChannelPointsMiner:
         self.watch_streak_cache_path = os.path.join(
             "logs", f"watch_streak_cache.{safe_account_name}.json"
         )
+        self.streamers_export_path = os.path.join(
+            "logs", f"{safe_account_name}_streamers.xlsx"
+        )
+        self.streamers_export_thread = None
+        self.streamers_export_interval_seconds = 10 * 60
+        self.streamer_follow_dates = {}
         legacy_watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
         initial_cache_load_path = self.watch_streak_cache_path
         if (
@@ -251,6 +264,97 @@ class TwitchChannelPointsMiner:
             http_server.start()
         else:
             logger.error("Can't start analytics(), please set enable_analytics=True")
+
+    def _format_followdate(self, followed_at: str | None) -> str:
+        if not followed_at:
+            return "..."
+        try:
+            normalized = str(followed_at).replace("Z", "+00:00")
+            return datetime.fromisoformat(normalized).strftime("%d.%m.%Y")
+        except Exception:
+            return "..."
+
+    def _format_sub(self, streamer: Streamer) -> str:
+        return "yes" if streamer.subscription_tier is not None else "no"
+
+    def _build_streamer_export_rows(self) -> list[dict[str, str]]:
+        sorted_streamers = sorted(
+            self.streamers,
+            key=lambda streamer: (
+                streamer.channel_points
+                if isinstance(streamer.channel_points, (int, float))
+                else float("-inf")
+            ),
+            reverse=True,
+        )
+
+        rows: list[dict[str, str]] = []
+        for streamer in sorted_streamers:
+            points_value = (
+                streamer.channel_points
+                if isinstance(streamer.channel_points, (int, float))
+                else 0
+            )
+            rows.append(
+                {
+                    "Streamer": streamer.username,
+                    "Points": _millify(points_value),
+                    "Followdate": self._format_followdate(
+                        self.streamer_follow_dates.get(streamer.username)
+                    ),
+                    "Sub (yes/no)": self._format_sub(streamer),
+                }
+            )
+        return rows
+
+    def _write_streamers_xlsx(self, rows: list[dict[str, str]]) -> None:
+        output_dir = os.path.dirname(self.streamers_export_path) or "."
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        data_frame = pd.DataFrame(
+            rows,
+            columns=["Streamer", "Points", "Followdate", "Sub (yes/no)"],
+        )
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix=".streamers_export_",
+            suffix=".xlsx",
+            dir=output_dir,
+        )
+        os.close(tmp_fd)
+        try:
+            data_frame.to_excel(tmp_path, index=False, engine="openpyxl")
+            os.replace(tmp_path, self.streamers_export_path)
+        finally:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+
+    def _export_streamers_snapshot(self) -> None:
+        try:
+            rows = self._build_streamer_export_rows()
+            self._write_streamers_xlsx(rows)
+            logger.info(
+                "Updated streamers export: %s",
+                self.streamers_export_path,
+                extra={"emoji": ":bar_chart:"},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to update streamers export %s: %s",
+                self.streamers_export_path,
+                exc,
+            )
+
+    def _streamers_export_loop(self) -> None:
+        while self.running:
+            interruptible_sleep(
+                lambda: self.running,
+                self.streamers_export_interval_seconds,
+            )
+            if not self.running:
+                break
+            self._export_streamers_snapshot()
+
 
     def mine(
         self,
@@ -431,6 +535,21 @@ class TwitchChannelPointsMiner:
                 streamer.channel_points for streamer in self.streamers
             ]
 
+            try:
+                self.streamer_follow_dates = self.twitch.get_followers_with_dates(
+                    order=followers_order
+                )
+            except Exception as exc:
+                self.streamer_follow_dates = {}
+                logger.warning("Failed to load follower dates for export: %s", exc)
+
+            self._export_streamers_snapshot()
+            self.streamers_export_thread = threading.Thread(
+                target=self._streamers_export_loop
+            )
+            self.streamers_export_thread.name = "Streamers export"
+            self.streamers_export_thread.start()
+
             # If we have at least one streamer with settings = make_predictions True
             make_predictions = at_least_one_value_in_settings_is(
                 self.streamers, "make_predictions", True
@@ -536,6 +655,9 @@ class TwitchChannelPointsMiner:
                             )
         finally:
             self.running = False
+            if self.streamers_export_thread is not None:
+                self.streamers_export_thread.join()
+            self._export_streamers_snapshot()
             if self.watch_streak_cache is not None:
                 self.watch_streak_cache.save_to_disk_if_dirty(
                     self.watch_streak_cache_path
@@ -565,6 +687,11 @@ class TwitchChannelPointsMiner:
 
         if self.sync_campaigns_thread is not None:
             self.sync_campaigns_thread.join()
+
+        if self.streamers_export_thread is not None:
+            self.streamers_export_thread.join()
+
+        self._export_streamers_snapshot()
 
         # Check if all the mutex are unlocked.
         # Prevent breaks of .json file

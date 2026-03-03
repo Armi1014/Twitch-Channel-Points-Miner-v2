@@ -37,6 +37,7 @@ setuptools.setup(
         "flask",
         "irc",
         "pandas",
+        "openpyxl",
         "pytz"
     ],
     long_description=read("README.md"),

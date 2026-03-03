@@ -562,6 +562,83 @@ class Twitch(object):
             )
         return follows
 
+    def get_followers_with_dates(
+        self, limit: int = 100, order: FollowersOrder = FollowersOrder.ASC
+    ) -> dict[str, str | None]:
+        json_data = copy.deepcopy(GQLOperations.ChannelFollows)
+        json_data["variables"] = {"limit": limit, "order": str(order)}
+        has_next = True
+        last_cursor = ""
+        follows: dict[str, str | None] = {}
+        timeouts_in_a_row = 0
+        while has_next is True:
+            json_data["variables"]["cursor"] = last_cursor
+            while True:
+                json_response = self.post_gql_request(json_data)
+                is_timeout = self._has_service_timeout(json_response)
+                if self._log_gql_errors(json_data.get("operationName"), json_response):
+                    if is_timeout:
+                        timeouts_in_a_row += 1
+                        logger.debug(
+                            "[follows] ChannelFollows service timeout (attempt %d)",
+                            timeouts_in_a_row,
+                        )
+                        if timeouts_in_a_row == 2:
+                            logger.info(
+                                "[follows] ChannelFollows got %d service timeouts, retrying...",
+                                timeouts_in_a_row,
+                            )
+                        time.sleep(min(3, 0.5 * timeouts_in_a_row + 0.5))
+                        continue
+                    return follows
+                break
+
+            if timeouts_in_a_row > 1:
+                logger.debug(
+                    "[follows] ChannelFollows recovered after %d service timeouts",
+                    timeouts_in_a_row,
+                )
+            timeouts_in_a_row = 0
+            follows_response = (
+                json_response.get("data", {})
+                .get("user", {})
+                .get("follows", {})
+                if isinstance(json_response, dict)
+                else {}
+            )
+            if not follows_response:
+                return follows
+
+            last_cursor = None
+            for edge in follows_response.get("edges", []):
+                if not isinstance(edge, dict):
+                    continue
+                try:
+                    node = edge.get("node", {})
+                    if not isinstance(node, dict):
+                        continue
+                    login = node.get("login")
+                    if not login:
+                        continue
+                    self_data = node.get("self", {})
+                    follower_data = self_data.get("follower", {}) if isinstance(self_data, dict) else {}
+                    followed_at = (
+                        follower_data.get("followedAt")
+                        if isinstance(follower_data, dict)
+                        else None
+                    )
+                    follows[str(login).lower()] = followed_at
+                    last_cursor = edge.get("cursor", last_cursor)
+                except (KeyError, TypeError, AttributeError):
+                    continue
+
+            has_next = (
+                follows_response.get("pageInfo", {}).get("hasNextPage", False)
+                if isinstance(follows_response, dict)
+                else False
+            )
+        return follows
+
     def update_raid(self, streamer, raid):
         if streamer.raid != raid:
             streamer.raid = raid
