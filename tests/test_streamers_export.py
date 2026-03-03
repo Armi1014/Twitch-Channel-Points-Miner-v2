@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import pandas as pd
+from openpyxl import load_workbook
 
 from TwitchChannelPointsMiner.TwitchChannelPointsMiner import TwitchChannelPointsMiner
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
@@ -56,30 +56,31 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(rows[1]["Sub (yes/no)"], "no")
             self.assertEqual(rows[2]["Sub (yes/no)"], "yes")
 
-    def test_write_streamers_xlsx_uses_atomic_replace(self):
+    def test_write_streamers_xlsx_applies_header_bold_and_autosize(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             export_path = os.path.join(tmp_dir, "streamers.xlsx")
             miner = self._make_miner(export_path)
 
             rows = [
                 {
-                    "Streamer": "easyemi",
+                    "Streamer": "very_long_streamer_name",
                     "Points": "184.88k",
                     "Followdate": "21.07.2025",
                     "Sub (yes/no)": "yes",
                 }
             ]
 
-            def fake_to_excel(self, file_path, index=False, engine=None):
-                with open(file_path, "wb") as file_obj:
-                    file_obj.write(b"xlsx")
-
-            with patch.object(pd.DataFrame, "to_excel", new=fake_to_excel):
-                miner._write_streamers_xlsx(rows)
+            miner._write_streamers_xlsx(rows)
 
             self.assertTrue(os.path.isfile(export_path))
-            with open(export_path, "rb") as file_obj:
-                self.assertEqual(file_obj.read(), b"xlsx")
+            workbook = load_workbook(export_path)
+            sheet = workbook.active
+
+            for header in ["A1", "B1", "C1", "D1"]:
+                self.assertTrue(sheet[header].font.bold)
+
+            self.assertGreater(sheet.column_dimensions["A"].width, len("Streamer"))
+            self.assertGreater(sheet.column_dimensions["D"].width, len("Sub (yes/no)"))
 
     def test_streamers_export_loop_runs_periodic_export(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

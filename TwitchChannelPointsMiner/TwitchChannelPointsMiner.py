@@ -16,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
@@ -175,8 +178,9 @@ class TwitchChannelPointsMiner:
         self.watch_streak_cache_path = os.path.join(
             "logs", f"watch_streak_cache.{safe_account_name}.json"
         )
+        report_date = datetime.now().strftime("%Y-%m-%d")
         self.streamers_export_path = os.path.join(
-            "logs", f"{safe_account_name}_streamers.xlsx"
+            "logs", f"report_{report_date}_{safe_account_name}.xlsx"
         )
         self.streamers_export_thread = None
         self.streamers_export_interval_seconds = 10 * 60
@@ -324,6 +328,23 @@ class TwitchChannelPointsMiner:
         os.close(tmp_fd)
         try:
             data_frame.to_excel(tmp_path, index=False, engine="openpyxl")
+            workbook = load_workbook(tmp_path)
+            sheet = workbook.active
+
+            # Make header row bold and autosize each used column.
+            for col_idx in range(1, sheet.max_column + 1):
+                header_cell = sheet.cell(row=1, column=col_idx)
+                header_cell.font = Font(bold=True)
+
+                max_length = len(str(header_cell.value or ""))
+                for row_idx in range(2, sheet.max_row + 1):
+                    value = sheet.cell(row=row_idx, column=col_idx).value
+                    if value is None:
+                        continue
+                    max_length = max(max_length, len(str(value)))
+                sheet.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
+
+            workbook.save(tmp_path)
             os.replace(tmp_path, self.streamers_export_path)
         finally:
             if os.path.isfile(tmp_path):
