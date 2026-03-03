@@ -6,6 +6,7 @@ from unittest.mock import patch
 from openpyxl import load_workbook
 
 from TwitchChannelPointsMiner.TwitchChannelPointsMiner import TwitchChannelPointsMiner
+from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
 from TwitchChannelPointsMiner.utils import _millify
 
@@ -19,6 +20,8 @@ class StreamersExportTest(unittest.TestCase):
         miner.streamers_export_thread = None
         miner.streamers_export_interval_seconds = 600
         miner.running = False
+        miner.username = "tester"
+        miner.watch_streak_cache = None
         return miner
 
     def test_build_streamer_export_rows_sorted_and_formatted(self):
@@ -42,6 +45,12 @@ class StreamersExportTest(unittest.TestCase):
                 "easyemi": "2025-07-21T12:34:56Z",
                 "rubia": None,
             }
+            miner.watch_streak_cache = WatchStreakCache(default_account_name="tester")
+            miner.watch_streak_cache.ensure_session("easyemi", "broadcast-a", 1)
+            miner.watch_streak_cache.mark_claimed("easyemi", "broadcast-a", 2)
+            miner.watch_streak_cache.ensure_session("easyemi", "broadcast-b", 3)
+            miner.watch_streak_cache.mark_claimed("easyemi", "broadcast-b", 4)
+            miner.watch_streak_cache.ensure_session("rubia", "broadcast-c", 5)
 
             rows = miner._build_streamer_export_rows()
 
@@ -55,6 +64,9 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(rows[0]["Sub (yes/no)"], "yes")
             self.assertEqual(rows[1]["Sub (yes/no)"], "no")
             self.assertEqual(rows[2]["Sub (yes/no)"], "yes")
+            self.assertEqual(rows[0]["Watch streak days"], 2)
+            self.assertEqual(rows[1]["Watch streak days"], 0)
+            self.assertEqual(rows[2]["Watch streak days"], 0)
 
     def test_write_streamers_xlsx_applies_header_bold_and_autosize(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -67,6 +79,7 @@ class StreamersExportTest(unittest.TestCase):
                     "Points": "184.88k",
                     "Followdate": "21.07.2025",
                     "Sub (yes/no)": "yes",
+                    "Watch streak days": 2,
                 }
             ]
 
@@ -76,11 +89,15 @@ class StreamersExportTest(unittest.TestCase):
             workbook = load_workbook(export_path)
             sheet = workbook.active
 
-            for header in ["A1", "B1", "C1", "D1"]:
+            for header in ["A1", "B1", "C1", "D1", "E1"]:
                 self.assertTrue(sheet[header].font.bold)
 
             self.assertGreater(sheet.column_dimensions["A"].width, len("Streamer"))
             self.assertGreater(sheet.column_dimensions["D"].width, len("Sub (yes/no)"))
+            self.assertGreater(
+                sheet.column_dimensions["E"].width,
+                len("Watch streak days"),
+            )
 
     def test_streamers_export_loop_runs_periodic_export(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -281,6 +281,21 @@ class TwitchChannelPointsMiner:
     def _format_sub(self, streamer: Streamer) -> str:
         return "yes" if streamer.subscription_tier is not None else "no"
 
+    def _watch_streak_days(self, streamer: Streamer) -> int:
+        watch_streak_cache = getattr(self, "watch_streak_cache", None)
+        if watch_streak_cache is None:
+            return 0
+
+        account_name = getattr(self, "username", None)
+        try:
+            days = watch_streak_cache.claimed_streak_days(
+                streamer.username,
+                account_name=account_name,
+            )
+        except Exception:
+            return 0
+        return max(0, int(days))
+
     def _build_streamer_export_rows(self) -> list[dict[str, str]]:
         sorted_streamers = sorted(
             self.streamers,
@@ -307,6 +322,7 @@ class TwitchChannelPointsMiner:
                         self.streamer_follow_dates.get(streamer.username)
                     ),
                     "Sub (yes/no)": self._format_sub(streamer),
+                    "Watch streak days": self._watch_streak_days(streamer),
                 }
             )
         return rows
@@ -317,7 +333,13 @@ class TwitchChannelPointsMiner:
 
         data_frame = pd.DataFrame(
             rows,
-            columns=["Streamer", "Points", "Followdate", "Sub (yes/no)"],
+            columns=[
+                "Streamer",
+                "Points",
+                "Followdate",
+                "Sub (yes/no)",
+                "Watch streak days",
+            ],
         )
 
         tmp_fd, tmp_path = tempfile.mkstemp(

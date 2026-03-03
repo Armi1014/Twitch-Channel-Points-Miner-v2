@@ -208,6 +208,22 @@ class WatchStreakCacheTest(unittest.TestCase):
                 cache.get_streamer_status("streamer-b", account_name="acc_two")
             )
 
+    def test_claimed_streak_days_counts_only_claimed_sessions(self):
+        now = time.time()
+        cache = WatchStreakCache(default_account_name="tester")
+
+        cache.ensure_session("easyemi", "b1", now)
+        cache.mark_claimed("easyemi", "b1", now + 1)
+        cache.ensure_session("easyemi", "b2", now + 2)
+        cache.mark_claimed("easyemi", "b2", now + 3)
+        cache.ensure_session("easyemi", "b3", now + 4)
+        cache.ensure_session("rubia", "r1", now + 5)
+        cache.mark_claimed("rubia", "r1", now + 6)
+
+        self.assertEqual(cache.claimed_streak_days("easyemi"), 2)
+        self.assertEqual(cache.claimed_streak_days("rubia"), 1)
+        self.assertEqual(cache.claimed_streak_days("itsceydi"), 0)
+
 
 
 if __name__ == "__main__":

@@ -297,6 +297,19 @@ class WatchStreakCache:
             return None
         return max(sessions, key=lambda s: s.started_at)
 
+    def claimed_streak_days(
+        self, streamer_login: str, account_name: str | None = None
+    ) -> int:
+        account = self._resolve_account(account_name)
+        with self._lock:
+            return sum(
+                1
+                for session in self._sessions.values()
+                if session.account_name == account
+                and session.streamer_login == streamer_login
+                and session.claimed is True
+            )
+
     def get_session(
         self, streamer_login: str, broadcast_id: str, account_name: str | None = None
     ) -> Optional[WatchStreakSession]:
