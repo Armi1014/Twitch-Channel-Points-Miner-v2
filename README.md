@@ -1,52 +1,54 @@
 # Twitch Channel Points Miner (Armi1014 Fork)
 
-Stability-focused fork of `Twitch-Channel-Points-Miner-v2` with better streak handling, cleaner priority behavior, and less transient log spam.
+Stability-focused fork of `Twitch-Channel-Points-Miner-v2` with stronger streak reliability, cleaner priority behavior, and less transient log noise.
 
-## Start in 60 Seconds
+## Quick Start (60 Seconds)
+
+1. Clone and enter the repo:
 
 ```sh
 git clone https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2
 cd Twitch-Channel-Points-Miner-v2
+```
+
+2. Create a virtual environment and install dependencies:
+
+```sh
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+3. Create your runner and start:
+
+```sh
 cp example.py run.py  # Windows: copy example.py run.py
 python run.py
 ```
 
-## Why This Fork
+## Why This Fork (vs Upstream)
 
-- Better runtime resilience when Twitch APIs are unstable.
-- Per-account streak cache file (`watch_streak_cache.<account>.json`) to avoid cross-account clashes.
-- Clear `Priority.FAVORITE` support (`favorite=True` in streamer settings).
-- Safer startup behavior for missing streak checks.
+- More resilient under transient Twitch/API/network issues (retry/backoff hardening).
+- More reliable watch streak handling, including already-online channels at startup.
+- Per-account streak cache (`watch_streak_cache.<account>.json`) to avoid multi-account clashes.
+- Clear favorite priority flow with `Priority.FAVORITE` + `favorite=True`.
+- Reduced log spam for recurring transient timeout patterns.
 
-## What Changed vs Upstream
+### Startup Performance (Sample)
 
-- Better retry/backoff handling for transient network and DNS/connection issues.
-- Better watch streak reliability and per-account streak cache handling.
-- Better startup behavior when channels are already online.
-- Better priority handling with explicit `Priority.FAVORITE` + `favorite=True`.
-- Less noisy logs for known transient Twitch timeout patterns.
+- Upstream sample startup: `2m 59s` (`179s`)
+- This fork sample startup: `14s`
+- Improvement: `165s` faster (`92.2%` less startup time, `~12.8x` speedup)
 
-## Quick Start
+Sample results vary by account size, network quality, and Twitch backend health.
 
-1. Clone:
+## Priority, Favorites, and Streak Setup
 
-```sh
-git clone https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2
-cd Twitch-Channel-Points-Miner-v2
-```
-
-2. Install:
-
-```sh
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-3. Create `run.py`:
+- Twitch awards points on up to 2 streams at once.
+- With `Priority.STREAK` first, the miner tries eligible streak channels first.
+- If no streak is currently eligible, it falls back to your next priorities.
+- `Priority.FAVORITE` applies only to streamers with `favorite=True`.
+- `watch_streak=True` must be set inside `StreamerSettings(...)`, not directly on `Streamer(...)`.
 
 ```python
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
@@ -56,7 +58,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, Streame
 twitch_miner = TwitchChannelPointsMiner(
     username="your-twitch-username",
     priority=[Priority.STREAK, Priority.FAVORITE, Priority.ORDER],
-    watch_streak_min_offline_seconds=1800,  # 1800 = 30 min, 0 = no wait
+    watch_streak_min_offline_seconds=1800,  # 1800 = 30 min default, 0 = aggressive
 )
 
 twitch_miner.mine(
@@ -68,64 +70,27 @@ twitch_miner.mine(
 )
 ```
 
-4. Run:
-
-```sh
-python run.py
-```
-
-## Priority and Streak Behavior
-
-- Twitch only gives points on up to 2 streams at once.
-- If `Priority.STREAK` is first, miner tries eligible streak channels first.
-- If no streak is currently eligible, it falls back to your next priorities.
-- `Priority.FAVORITE` works only for streamers created with `Streamer(..., settings=StreamerSettings(favorite=True))`.
-
-## Favorites + Streak Cheat Sheet
-
-- Favorite only:
-  - `Streamer("name", settings=StreamerSettings(favorite=True))`
-- Streak only:
-  - `Streamer("name", settings=StreamerSettings(watch_streak=True))`
-- Favorite + streak:
-  - `Streamer("name", settings=StreamerSettings(favorite=True, watch_streak=True))`
-- Recommended priority:
-  - `priority=[Priority.STREAK, Priority.FAVORITE, Priority.ORDER]`
-- Common mistake:
-  - `watch_streak=True` must be inside `StreamerSettings(...)`, not directly on `Streamer(...)`.
-
 ## FAQ
 
 ### Where do I set favorites?
 
-Inside `StreamerSettings`, for example:
-
-```python
-Streamer("name", settings=StreamerSettings(favorite=True))
-```
+Inside `StreamerSettings`, for example: `Streamer("name", settings=StreamerSettings(favorite=True))`.
 
 ### Where do I set streak wait time?
 
-In `TwitchChannelPointsMiner(...)`:
-
-```python
-watch_streak_min_offline_seconds=1800
-```
-
-- `1800` = 30 minutes (default)
-- `0` = no offline wait (more aggressive streak checking)
+In `TwitchChannelPointsMiner(...)` with `watch_streak_min_offline_seconds` (`1800` default, `0` for no offline wait).
 
 ### What happens to streamers already online at startup?
 
-They are not ignored. The miner can still probe streak status for already-online channels.
+They are still checked; the miner can probe streak status for already-online channels.
 
 ### Why is someone missing in `watch_streak_cache.<account>.json`?
 
-That file stores streak sessions, not a full streamer list. A streamer appears there when a streak session is created/updated.
+That file stores streak sessions, not a full streamer list, so entries appear when a streak session is created or updated.
 
-### Why do I still see occasional `503` / `service timeout`?
+### Why do I still see occasional `503` or `service timeout`?
 
-Those usually come from Twitch backend instability. The miner retries and suppresses common timeout spam, but cannot fully control Twitch-side outages.
+Those are usually Twitch-side backend issues; the miner retries and suppresses common spam, but cannot eliminate all upstream outages.
 
 ## Links
 
