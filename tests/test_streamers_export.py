@@ -3,7 +3,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from openpyxl import load_workbook
 
@@ -27,6 +27,7 @@ class StreamersExportTest(unittest.TestCase):
         miner.running = False
         miner.username = "tester"
         miner.watch_streak_cache = WatchStreakCache(default_account_name="tester")
+        miner._watch_streak_days_lookup_attempted = set()
         return miner
 
     def test_build_streamer_export_rows_sorted_and_formatted(self):
@@ -143,6 +144,51 @@ class StreamersExportTest(unittest.TestCase):
 
             rows = miner._build_streamer_export_rows()
             self.assertEqual(rows[0]["Points gained"], 0)
+
+    def test_watch_streak_days_fetches_twitch_value_when_cache_is_missing_days(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            miner = self._make_miner(os.path.join(tmp_dir, "streamers.xlsx"))
+
+            streamer = Streamer("demo")
+            streamer.channel_id = "123456"
+            miner.streamers = [streamer]
+            miner.watch_streak_cache.ensure_session(
+                streamer.username,
+                "broadcast-a",
+                1,
+                account_name="tester",
+            )
+            miner.watch_streak_cache.mark_claimed(
+                streamer.username,
+                "broadcast-a",
+                2,
+                account_name="tester",
+            )
+            miner.watch_streak_cache.ensure_session(
+                streamer.username,
+                "broadcast-b",
+                3,
+                account_name="tester",
+            )
+            miner.watch_streak_cache.mark_claimed(
+                streamer.username,
+                "broadcast-b",
+                4,
+                account_name="tester",
+            )
+            miner.twitch = Mock()
+            miner.twitch.get_watch_streak_days.return_value = 26
+
+            rows = miner._build_streamer_export_rows()
+
+            self.assertEqual(rows[0]["Watchstreaks"], 26)
+            miner.twitch.get_watch_streak_days.assert_called_once_with(streamer)
+            status = miner.watch_streak_cache.get_streamer_status(
+                streamer.username,
+                account_name="tester",
+            )
+            self.assertIsNotNone(status)
+            self.assertEqual(status.watch_streak_days, 26)
 
     @unittest.skipUnless(hasattr(time, "tzset"), "timezone switching requires tzset")
     def test_format_timestamp_date_uses_utc_date(self):

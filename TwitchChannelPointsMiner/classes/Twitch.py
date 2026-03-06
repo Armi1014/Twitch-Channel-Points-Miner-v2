@@ -426,10 +426,7 @@ class Twitch(object):
             stream_info["stream"]["createdAt"] = stream_created_at
 
         if streamer.settings.watch_streak is True and streamer.channel_id:
-            reward_list_request = copy.deepcopy(GQLOperations.RewardList)
-            reward_list_request["variables"]["channelID"] = streamer.channel_id
-            reward_response = self.post_gql_request(reward_list_request)
-            self._log_gql_errors(reward_list_request.get("operationName"), reward_response)
+            reward_response = self._get_reward_list_response(streamer)
             watch_streak_days = self._extract_watch_streak_days(reward_response)
             if watch_streak_days is not None:
                 stream_info["watchStreakDays"] = watch_streak_days
@@ -505,6 +502,21 @@ class Twitch(object):
         if not user or user.get("id") is None:
             raise StreamerDoesNotExistException
         return user["id"]
+
+    def _get_reward_list_response(self, streamer):
+        if not getattr(streamer, "channel_id", None):
+            return None
+        reward_list_request = copy.deepcopy(GQLOperations.RewardList)
+        reward_list_request["variables"]["channelID"] = streamer.channel_id
+        reward_response = self.post_gql_request(reward_list_request)
+        self._log_gql_errors(reward_list_request.get("operationName"), reward_response)
+        return reward_response
+
+    def get_watch_streak_days(self, streamer):
+        reward_response = self._get_reward_list_response(streamer)
+        if reward_response is None:
+            return None
+        return self._extract_watch_streak_days(reward_response)
 
     def get_followers(
         self, limit: int = 100, order: FollowersOrder = FollowersOrder.ASC

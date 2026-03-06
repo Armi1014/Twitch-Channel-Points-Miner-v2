@@ -93,6 +93,7 @@ class TwitchChannelPointsMiner:
         "streamer_follow_dates",
         "daily_points_day_key",
         "daily_points_baseline",
+        "_watch_streak_days_lookup_attempted",
     ]
 
     def __init__(
@@ -189,6 +190,7 @@ class TwitchChannelPointsMiner:
         self.streamer_follow_dates = {}
         self.daily_points_day_key = datetime.now().strftime("%Y-%m-%d")
         self.daily_points_baseline = {}
+        self._watch_streak_days_lookup_attempted = set()
         legacy_watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
         initial_cache_load_path = self.watch_streak_cache_path
         if (
@@ -390,10 +392,72 @@ class TwitchChannelPointsMiner:
 
         return max(0, int(current_total - baseline))
 
+    def _fetch_watch_streak_days_from_twitch(self, streamer: Streamer) -> int | None:
+        twitch = getattr(self, "twitch", None)
+        if twitch is None or not getattr(streamer, "channel_id", None):
+            return None
+
+        attempted = getattr(self, "_watch_streak_days_lookup_attempted", None)
+        if attempted is None:
+            attempted = set()
+            self._watch_streak_days_lookup_attempted = attempted
+        if streamer.username in attempted:
+            return None
+        attempted.add(streamer.username)
+
+        try:
+            days = twitch.get_watch_streak_days(streamer)
+        except Exception as exc:
+            logger.debug(
+                "Failed to fetch watch streak days from Twitch for %s: %s",
+                streamer.username,
+                exc,
+            )
+            return None
+        if days in [None, ""]:
+            return None
+
+        days_value = max(0, int(days))
+        watch_streak_cache = getattr(self, "watch_streak_cache", None)
+        account_name = getattr(self, "username", None)
+        if watch_streak_cache is not None:
+            status = watch_streak_cache.get_streamer_status(
+                streamer.username,
+                account_name=account_name,
+            )
+            watch_streak_cache.set_streamer_status(
+                streamer.username,
+                watch_streak_detected=(
+                    getattr(status, "watch_streak_detected", False)
+                    if status is not None
+                    else False
+                ),
+                is_online=(
+                    getattr(status, "is_online", bool(getattr(streamer, "is_online", False)))
+                    if status is not None
+                    else bool(getattr(streamer, "is_online", False))
+                ),
+                watch_streak_days=days_value,
+                last_stream_started_at=(
+                    getattr(status, "last_stream_started_at", None)
+                    if status is not None
+                    else getattr(getattr(streamer, "stream", None), "created_at", None)
+                ),
+                broadcast_id=(
+                    getattr(status, "broadcast_id", None)
+                    if status is not None
+                    else getattr(getattr(streamer, "stream", None), "broadcast_id", None)
+                ),
+                checked_at=time.time(),
+                account_name=account_name,
+            )
+        return days_value
+
     def _watch_streak_days(self, streamer: Streamer) -> int:
         watch_streak_cache = getattr(self, "watch_streak_cache", None)
         if watch_streak_cache is None:
-            return 0
+            live_days = self._fetch_watch_streak_days_from_twitch(streamer)
+            return live_days if live_days is not None else 0
 
         account_name = getattr(self, "username", None)
         try:
@@ -406,6 +470,10 @@ class TwitchChannelPointsMiner:
                 and getattr(status, "watch_streak_days", None) not in [None, ""]
             ):
                 return max(0, int(status.watch_streak_days))
+
+            live_days = self._fetch_watch_streak_days_from_twitch(streamer)
+            if live_days is not None:
+                return live_days
 
             days = watch_streak_cache.claimed_streak_days(
                 streamer.username,

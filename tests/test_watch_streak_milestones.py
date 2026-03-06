@@ -140,6 +140,34 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(stream_info)
         self.assertEqual(stream_info.get("watchStreakDays"), 26)
 
+    def test_get_watch_streak_days_queries_reward_list(self):
+        twitch = Twitch("milestone-days-direct", "ua")
+        streamer = self._make_streamer("streamer")
+
+        responses = {
+            "RewardList": {
+                "data": {
+                    "channel": {
+                        "self": {
+                            "watchStreakMilestone": {
+                                "watchStreakMilestone": {
+                                    "watchStreakDays": 19,
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            days = twitch.get_watch_streak_days(streamer)
+
+        self.assertEqual(days, 19)
+
     def test_extract_watch_streak_days_prefers_watch_streak_days_field(self):
         twitch = Twitch("milestone-days-priority", "ua")
         response = {
