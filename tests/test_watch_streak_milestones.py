@@ -112,6 +112,67 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertTrue(updated)
         self.assertFalse(streamer.chat_banned)
 
+    def test_get_chat_ban_status_returns_false_when_twitch_reports_null(self):
+        twitch = Twitch("chat-ban-direct-null", "ua")
+        streamer = self._make_streamer("streamer")
+
+        responses = {
+            "ChatRoomBanStatus": {
+                "data": {
+                    "chatRoomBanStatus": None,
+                    "targetUser": {
+                        "id": "261663741",
+                        "login": "armi1014",
+                        "__typename": "User",
+                    },
+                }
+            }
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(
+            type(twitch.twitch_login),
+            "get_user_id",
+            return_value="261663741",
+        ), patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            chat_banned = twitch.get_chat_ban_status(streamer)
+
+        self.assertFalse(chat_banned)
+
+    def test_get_chat_ban_status_returns_true_when_twitch_reports_ban(self):
+        twitch = Twitch("chat-ban-direct-hit", "ua")
+        streamer = self._make_streamer("streamer")
+
+        responses = {
+            "ChatRoomBanStatus": {
+                "data": {
+                    "chatRoomBanStatus": {
+                        "createdAt": "2026-03-06T19:08:21.925400515Z",
+                        "isPermanent": False,
+                    },
+                    "targetUser": {
+                        "id": "261663741",
+                        "login": "armi1014",
+                        "__typename": "User",
+                    },
+                }
+            }
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(
+            type(twitch.twitch_login),
+            "get_user_id",
+            return_value="261663741",
+        ), patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            chat_banned = twitch.get_chat_ban_status(streamer)
+
+        self.assertTrue(chat_banned)
+
     def test_get_stream_info_marks_streak_complete_from_milestone_timestamp(self):
         twitch = Twitch("milestone-test", "ua")
         streamer = self._make_streamer("streamer")

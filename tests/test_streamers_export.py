@@ -18,8 +18,13 @@ class StreamersExportTest(unittest.TestCase):
         miner = TwitchChannelPointsMiner.__new__(TwitchChannelPointsMiner)
         miner.streamers = []
         miner.original_streamers = []
+        miner.daily_points_baseline_path = os.path.join(
+            os.path.dirname(export_path) or ".",
+            "daily_points_baseline.tester.json",
+        )
         miner.daily_points_day_key = datetime.now().strftime("%Y-%m-%d")
         miner.daily_points_baseline = {}
+        miner._daily_points_baseline_dirty = False
         miner.streamer_follow_dates = {}
         miner.streamers_export_path = export_path
         miner.streamers_export_thread = None
@@ -28,6 +33,7 @@ class StreamersExportTest(unittest.TestCase):
         miner.username = "tester"
         miner.watch_streak_cache = WatchStreakCache(default_account_name="tester")
         miner._watch_streak_days_lookup_attempted = set()
+        miner._chat_ban_lookup_attempted = set()
         return miner
 
     def test_build_streamer_export_rows_sorted_and_formatted(self):
@@ -131,6 +137,32 @@ class StreamersExportTest(unittest.TestCase):
             rows = miner._build_streamer_export_rows()
             self.assertEqual(rows[0]["Points gained"], 0)
 
+    def test_points_gained_persists_across_same_day_restart(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            export_path = os.path.join(tmp_dir, "streamers.xlsx")
+            miner = self._make_miner(export_path)
+
+            first_streamer = Streamer("demo")
+            first_streamer.history = {"WATCH": {"counter": 1, "amount": 120}}
+            miner.streamers = [first_streamer]
+
+            first_rows = miner._build_streamer_export_rows()
+            self.assertEqual(first_rows[0]["Points gained"], 0)
+            miner._save_daily_points_baseline_if_dirty()
+
+            restarted = self._make_miner(export_path)
+            restarted._load_daily_points_baseline()
+
+            second_streamer = Streamer("demo")
+            second_streamer.history = {
+                "WATCH": {"counter": 1, "amount": 120},
+                "CLAIM": {"counter": 1, "amount": 50},
+            }
+            restarted.streamers = [second_streamer]
+
+            second_rows = restarted._build_streamer_export_rows()
+            self.assertEqual(second_rows[0]["Points gained"], 50)
+
     def test_points_gained_daily_resets_on_day_change(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             miner = self._make_miner(os.path.join(tmp_dir, "streamers.xlsx"))
@@ -189,6 +221,22 @@ class StreamersExportTest(unittest.TestCase):
             )
             self.assertIsNotNone(status)
             self.assertEqual(status.watch_streak_days, 26)
+
+    def test_banned_column_fetches_twitch_value_when_startup_state_is_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            miner = self._make_miner(os.path.join(tmp_dir, "streamers.xlsx"))
+
+            streamer = Streamer("demo")
+            streamer.channel_id = "123456"
+            miner.streamers = [streamer]
+            miner.twitch = Mock()
+            miner.twitch.get_chat_ban_status.return_value = True
+
+            rows = miner._build_streamer_export_rows()
+
+            self.assertEqual(rows[0]["Banned (yes/no)"], "yes")
+            miner.twitch.get_chat_ban_status.assert_called_once_with(streamer)
+            self.assertTrue(streamer.chat_banned)
 
     @unittest.skipUnless(hasattr(time, "tzset"), "timezone switching requires tzset")
     def test_format_timestamp_date_uses_utc_date(self):

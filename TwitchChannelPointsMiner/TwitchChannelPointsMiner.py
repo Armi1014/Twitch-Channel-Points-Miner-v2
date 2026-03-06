@@ -39,9 +39,11 @@ from TwitchChannelPointsMiner.utils import (
     _millify,
     at_least_one_value_in_settings_is,
     check_versions,
+    dump_json,
     get_user_agent,
     internet_connection_available,
     interruptible_sleep,
+    load_json,
     set_default_settings,
 )
 
@@ -91,9 +93,12 @@ class TwitchChannelPointsMiner:
         "streamers_export_thread",
         "streamers_export_interval_seconds",
         "streamer_follow_dates",
+        "daily_points_baseline_path",
         "daily_points_day_key",
         "daily_points_baseline",
+        "_daily_points_baseline_dirty",
         "_watch_streak_days_lookup_attempted",
+        "_chat_ban_lookup_attempted",
     ]
 
     def __init__(
@@ -188,9 +193,15 @@ class TwitchChannelPointsMiner:
         self.streamers_export_thread = None
         self.streamers_export_interval_seconds = 10 * 60
         self.streamer_follow_dates = {}
+        self.daily_points_baseline_path = os.path.join(
+            "logs", f"daily_points_baseline.{safe_account_name}.json"
+        )
         self.daily_points_day_key = datetime.now().strftime("%Y-%m-%d")
         self.daily_points_baseline = {}
+        self._daily_points_baseline_dirty = False
         self._watch_streak_days_lookup_attempted = set()
+        self._chat_ban_lookup_attempted = set()
+        self._load_daily_points_baseline()
         legacy_watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
         initial_cache_load_path = self.watch_streak_cache_path
         if (
@@ -380,6 +391,50 @@ class TwitchChannelPointsMiner:
         if day_key != self.daily_points_day_key:
             self.daily_points_day_key = day_key
             self.daily_points_baseline = {}
+            self._daily_points_baseline_dirty = True
+
+    def _load_daily_points_baseline(self) -> None:
+        path = getattr(self, "daily_points_baseline_path", None)
+        today = datetime.now().strftime("%Y-%m-%d")
+        self.daily_points_day_key = today
+        self.daily_points_baseline = {}
+        self._daily_points_baseline_dirty = False
+        if not path:
+            return
+
+        payload = load_json(path, {})
+        if not isinstance(payload, dict):
+            return
+        if payload.get("day_key") != today:
+            return
+
+        baseline = payload.get("baseline")
+        if not isinstance(baseline, dict):
+            return
+
+        normalized_baseline = {}
+        for username, value in baseline.items():
+            try:
+                normalized_baseline[str(username)] = max(0, int(value))
+            except Exception:
+                continue
+        self.daily_points_baseline = normalized_baseline
+
+    def _save_daily_points_baseline_if_dirty(self) -> None:
+        if not getattr(self, "_daily_points_baseline_dirty", False):
+            return
+        path = getattr(self, "daily_points_baseline_path", None)
+        if not path:
+            return
+
+        dump_json(
+            path,
+            {
+                "day_key": self.daily_points_day_key,
+                "baseline": self.daily_points_baseline,
+            },
+        )
+        self._daily_points_baseline_dirty = False
 
     def _points_gained(self, streamer: Streamer) -> int:
         self._reset_daily_points_baseline_if_needed()
@@ -388,6 +443,7 @@ class TwitchChannelPointsMiner:
         baseline = self.daily_points_baseline.get(streamer.username)
         if baseline is None:
             self.daily_points_baseline[streamer.username] = current_total
+            self._daily_points_baseline_dirty = True
             return 0
 
         return max(0, int(current_total - baseline))
@@ -453,6 +509,34 @@ class TwitchChannelPointsMiner:
             )
         return days_value
 
+    def _fetch_chat_ban_status_from_twitch(self, streamer: Streamer) -> bool:
+        twitch = getattr(self, "twitch", None)
+        if twitch is None or not getattr(streamer, "channel_id", None):
+            return bool(getattr(streamer, "chat_banned", False))
+
+        attempted = getattr(self, "_chat_ban_lookup_attempted", None)
+        if attempted is None:
+            attempted = set()
+            self._chat_ban_lookup_attempted = attempted
+        if streamer.username in attempted:
+            return bool(getattr(streamer, "chat_banned", False))
+        attempted.add(streamer.username)
+
+        try:
+            chat_banned = twitch.get_chat_ban_status(streamer)
+        except Exception as exc:
+            logger.debug(
+                "Failed to fetch chat ban status from Twitch for %s: %s",
+                streamer.username,
+                exc,
+            )
+            return bool(getattr(streamer, "chat_banned", False))
+        if chat_banned is None:
+            return bool(getattr(streamer, "chat_banned", False))
+
+        streamer.chat_banned = bool(chat_banned)
+        return streamer.chat_banned
+
     def _watch_streak_days(self, streamer: Streamer) -> int:
         watch_streak_cache = getattr(self, "watch_streak_cache", None)
         if watch_streak_cache is None:
@@ -511,7 +595,7 @@ class TwitchChannelPointsMiner:
                     "Last Stream": self._last_stream_date(streamer),
                     "Sub (yes/no)": self._format_sub(streamer),
                     "Banned (yes/no)": self._format_yes_no(
-                        getattr(streamer, "chat_banned", False)
+                        self._fetch_chat_ban_status_from_twitch(streamer)
                     ),
                     "Watchstreaks": self._watch_streak_days(streamer),
                     "Points gained": self._points_gained(streamer),
@@ -579,6 +663,8 @@ class TwitchChannelPointsMiner:
                 self.streamers_export_path,
                 exc,
             )
+        finally:
+            self._save_daily_points_baseline_if_dirty()
 
     def _streamers_export_loop(self) -> None:
         while self.running:
@@ -898,6 +984,7 @@ class TwitchChannelPointsMiner:
                 self.watch_streak_cache.save_to_disk_if_dirty(
                     self.watch_streak_cache_path
                 )
+            self._save_daily_points_baseline_if_dirty()
 
     def end(self, signum, frame):
         if not self.running:
@@ -943,6 +1030,7 @@ class TwitchChannelPointsMiner:
             self.watch_streak_cache.save_to_disk_if_dirty(
                 self.watch_streak_cache_path
             )
+        self._save_daily_points_baseline_if_dirty()
         self.queue_listener.stop()
 
         sys.exit(0)

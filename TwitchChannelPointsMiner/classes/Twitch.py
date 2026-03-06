@@ -442,24 +442,9 @@ class Twitch(object):
             ):
                 stream_info["watchStreakMissing"] = False
 
-        viewer_user_id = self.twitch_login.get_user_id()
-        if streamer.channel_id and viewer_user_id is not None:
-            chat_room_ban_request = copy.deepcopy(GQLOperations.ChatRoomBanStatus)
-            chat_room_ban_request["variables"] = {
-                "targetUserID": f"{viewer_user_id}",
-                "channelID": streamer.channel_id,
-            }
-            chat_room_ban_response = self.post_gql_request(chat_room_ban_request)
-            self._log_gql_errors(
-                chat_room_ban_request.get("operationName"),
-                chat_room_ban_response,
-            )
-            if isinstance(chat_room_ban_response, dict):
-                data = chat_room_ban_response.get("data")
-                if isinstance(data, dict):
-                    chat_room_ban_status = data.get("chatRoomBanStatus")
-                    if chat_room_ban_status is not None:
-                        stream_info["chatRoomBanStatus"] = chat_room_ban_status
+        chat_banned = self.get_chat_ban_status(streamer)
+        if chat_banned is not None:
+            stream_info["chatRoomBanStatus"] = chat_banned
 
         self._stream_info_cache[cache_key] = {
             "data": stream_info,
@@ -519,6 +504,28 @@ class Twitch(object):
         if reward_response is None:
             return None
         return self._extract_watch_streak_days(reward_response)
+
+    def get_chat_ban_status(self, streamer):
+        viewer_user_id = self.twitch_login.get_user_id()
+        if not getattr(streamer, "channel_id", None) or viewer_user_id is None:
+            return None
+
+        chat_room_ban_request = copy.deepcopy(GQLOperations.ChatRoomBanStatus)
+        chat_room_ban_request["variables"] = {
+            "targetUserID": f"{viewer_user_id}",
+            "channelID": streamer.channel_id,
+        }
+        chat_room_ban_response = self.post_gql_request(chat_room_ban_request)
+        self._log_gql_errors(
+            chat_room_ban_request.get("operationName"),
+            chat_room_ban_response,
+        )
+        if not isinstance(chat_room_ban_response, dict):
+            return None
+        data = chat_room_ban_response.get("data")
+        if not isinstance(data, dict) or "chatRoomBanStatus" not in data:
+            return None
+        return self._is_chat_banned(data.get("chatRoomBanStatus"))
 
     def get_followers(
         self, limit: int = 100, order: FollowersOrder = FollowersOrder.ASC
