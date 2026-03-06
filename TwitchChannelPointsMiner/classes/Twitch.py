@@ -216,7 +216,9 @@ class Twitch(object):
             logger.debug("Invalid stream info for %s", streamer.username)
             return False
 
-        streamer.chat_banned = stream_info.get("chatRoomBanStatus") is not None
+        streamer.chat_banned = self._is_chat_banned(
+            stream_info.get("chatRoomBanStatus")
+        )
 
         streak_was_missing = streamer.stream.watch_streak_missing
         startup_streak_probe = (
@@ -913,6 +915,29 @@ class Twitch(object):
         except ValueError:
             return None
 
+    def _is_chat_banned(self, chat_room_ban_status):
+        if chat_room_ban_status is None:
+            return False
+        if isinstance(chat_room_ban_status, dict):
+            if "banStatus" in chat_room_ban_status:
+                return self._is_chat_banned(chat_room_ban_status.get("banStatus"))
+            if "isBanned" in chat_room_ban_status:
+                return bool(chat_room_ban_status.get("isBanned"))
+            if not chat_room_ban_status:
+                return False
+            known_ban_fields = {
+                "bannedUser",
+                "createdAt",
+                "expiresAt",
+                "expiresInMs",
+                "isPermanent",
+                "moderator",
+                "reason",
+                "roomOwner",
+            }
+            return any(field in chat_room_ban_status for field in known_ban_fields)
+        return bool(chat_room_ban_status)
+
     def _extract_stream_created_timestamp(self, response):
         if not isinstance(response, dict):
             return None
@@ -1002,6 +1027,10 @@ class Twitch(object):
             if depth > 6:
                 return None
             if isinstance(node, dict):
+                if str(node.get("category", "")).upper() == "WATCH_STREAK":
+                    parsed_value = _to_non_negative_int(node.get("value"))
+                    if parsed_value is not None:
+                        return parsed_value
                 for key in explicit_keys:
                     if key in node:
                         parsed = _to_non_negative_int(node.get(key))
