@@ -263,6 +263,8 @@ class Twitch(object):
                     and streamer.stream.watch_streak_missing is False
                 ),
                 is_online=True,
+                watch_streak_days=stream_info.get("watchStreakDays"),
+                last_stream_started_at=stream_info.get("stream", {}).get("createdAt"),
                 broadcast_id=streamer.stream.broadcast_id,
                 checked_at=time.time(),
                 account_name=self.account_username,
@@ -428,6 +430,9 @@ class Twitch(object):
             reward_list_request["variables"]["channelID"] = streamer.channel_id
             reward_response = self.post_gql_request(reward_list_request)
             self._log_gql_errors(reward_list_request.get("operationName"), reward_response)
+            watch_streak_days = self._extract_watch_streak_days(reward_response)
+            if watch_streak_days is not None:
+                stream_info["watchStreakDays"] = watch_streak_days
             milestone_achievement_at = self._extract_watch_streak_achievement_timestamp(
                 reward_response
             )
@@ -934,6 +939,90 @@ class Twitch(object):
             viewer_milestone.get("achievementTimestamp")
         )
 
+    def _extract_watch_streak_days(self, response):
+        if not isinstance(response, dict):
+            return None
+        data = response.get("data")
+        if not isinstance(data, dict):
+            return None
+        channel = data.get("channel")
+        if not isinstance(channel, dict):
+            return None
+        viewer_self = channel.get("self")
+        if not isinstance(viewer_self, dict):
+            return None
+        milestone = viewer_self.get("watchStreakMilestone")
+        if not isinstance(milestone, dict):
+            return None
+
+        candidates: list[dict] = []
+        viewer_milestone = milestone.get("watchStreakMilestone")
+        if isinstance(viewer_milestone, dict):
+            candidates.append(viewer_milestone)
+        candidates.append(milestone)
+
+        explicit_keys = (
+            "watchStreakDays",
+            "currentStreakDays",
+            "streakDays",
+            "daysWatched",
+            "streakDayCount",
+            "dayCount",
+            "currentDay",
+        )
+
+        def _to_non_negative_int(value):
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value if value >= 0 else None
+            if isinstance(value, float):
+                if value.is_integer() and value >= 0:
+                    return int(value)
+                return None
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped.isdigit():
+                    return int(stripped)
+            return None
+
+        def _walk(node, depth=0):
+            if depth > 6:
+                return None
+            if isinstance(node, dict):
+                for key in explicit_keys:
+                    if key in node:
+                        parsed = _to_non_negative_int(node.get(key))
+                        if parsed is not None:
+                            return parsed
+                for key, value in node.items():
+                    key_lower = str(key).lower()
+                    parsed = _to_non_negative_int(value)
+                    if (
+                        parsed is not None
+                        and "day" in key_lower
+                        and "timestamp" not in key_lower
+                        and "until" not in key_lower
+                        and parsed <= 3650
+                    ):
+                        return parsed
+                for value in node.values():
+                    nested = _walk(value, depth + 1)
+                    if nested is not None:
+                        return nested
+            elif isinstance(node, list):
+                for item in node:
+                    nested = _walk(item, depth + 1)
+                    if nested is not None:
+                        return nested
+            return None
+
+        for candidate in candidates:
+            extracted = _walk(candidate)
+            if extracted is not None:
+                return extracted
+        return None
+
     def _operation_name_from_json_data(self, json_data):
         if isinstance(json_data, dict):
             return json_data.get("operationName", "UnknownOperation")
@@ -1391,16 +1480,21 @@ class Twitch(object):
             streamer_login = session.streamer_login
             is_online = True
             broadcast_id = session.broadcast_id
+            last_stream_started_at = None
             if streamer is not None:
                 streamer_login = getattr(streamer, "username", streamer_login)
                 is_online = bool(getattr(streamer, "is_online", True))
                 streamer_stream = getattr(streamer, "stream", None)
                 if streamer_stream is not None:
                     broadcast_id = getattr(streamer_stream, "broadcast_id", broadcast_id)
+                    last_stream_started_at = getattr(
+                        streamer_stream, "created_at", None
+                    )
             self.watch_streak_cache.set_streamer_status(
                 streamer_login,
                 watch_streak_detected=True,
                 is_online=is_online,
+                last_stream_started_at=last_stream_started_at,
                 broadcast_id=broadcast_id,
                 checked_at=time.time(),
                 account_name=self.account_username,

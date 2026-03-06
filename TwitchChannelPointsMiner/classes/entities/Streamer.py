@@ -173,6 +173,7 @@ class Streamer(object):
                 self.username,
                 watch_streak_detected=False,
                 is_online=False,
+                last_stream_started_at=getattr(self.stream, "created_at", None),
                 broadcast_id=None,
                 checked_at=self.offline_at,
                 account_name=self.watch_streak_account,
@@ -215,6 +216,7 @@ class Streamer(object):
                         and self.stream.watch_streak_missing is False
                     ),
                     is_online=True,
+                    last_stream_started_at=getattr(self.stream, "created_at", None),
                     broadcast_id=self.stream.broadcast_id,
                     checked_at=self.online_at,
                     account_name=self.watch_streak_account,
@@ -264,6 +266,7 @@ class Streamer(object):
                     self.username,
                     watch_streak_detected=True,
                     is_online=bool(self.is_online),
+                    last_stream_started_at=getattr(self.stream, "created_at", None),
                     broadcast_id=self.stream.broadcast_id,
                     checked_at=time.time(),
                     account_name=self.watch_streak_account,

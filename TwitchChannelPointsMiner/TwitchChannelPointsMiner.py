@@ -12,12 +12,12 @@ import time
 import uuid
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import Font
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
@@ -91,6 +91,8 @@ class TwitchChannelPointsMiner:
         "streamers_export_thread",
         "streamers_export_interval_seconds",
         "streamer_follow_dates",
+        "daily_points_day_key",
+        "daily_points_baseline",
     ]
 
     def __init__(
@@ -185,6 +187,8 @@ class TwitchChannelPointsMiner:
         self.streamers_export_thread = None
         self.streamers_export_interval_seconds = 10 * 60
         self.streamer_follow_dates = {}
+        self.daily_points_day_key = datetime.now().strftime("%Y-%m-%d")
+        self.daily_points_baseline = {}
         legacy_watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
         initial_cache_load_path = self.watch_streak_cache_path
         if (
@@ -281,6 +285,111 @@ class TwitchChannelPointsMiner:
     def _format_sub(self, streamer: Streamer) -> str:
         return "yes" if streamer.subscription_tier is not None else "no"
 
+    def _format_yes_no(self, value: object) -> str:
+        return "yes" if bool(value) else "no"
+
+    def _format_timestamp_date(self, timestamp: float | int | None) -> str:
+        if timestamp in [None, ""]:
+            return "..."
+        try:
+            return datetime.fromtimestamp(
+                float(timestamp), tz=timezone.utc
+            ).strftime("%d.%m.%Y")
+        except Exception:
+            return "..."
+
+    def _safe_account_name(self) -> str:
+        return "".join(
+            ch if (ch.isalnum() or ch in "._-") else "_"
+            for ch in self.username.lower()
+        )
+
+    def _uses_dated_streamers_export_path(self) -> bool:
+        file_name = os.path.basename(self.streamers_export_path or "")
+        return file_name.startswith("report_") and file_name.endswith(
+            f"_{self._safe_account_name()}.xlsx"
+        )
+
+    def _current_streamers_export_path(self) -> str:
+        output_dir = os.path.dirname(self.streamers_export_path) or "logs"
+        report_date = datetime.now().strftime("%Y-%m-%d")
+        return os.path.join(
+            output_dir, f"report_{report_date}_{self._safe_account_name()}.xlsx"
+        )
+
+    def _refresh_streamers_export_path_if_needed(self) -> None:
+        if not self._uses_dated_streamers_export_path():
+            return
+        current_path = self._current_streamers_export_path()
+        if self.streamers_export_path != current_path:
+            self.streamers_export_path = current_path
+
+    def _last_stream_date(self, streamer: Streamer) -> str:
+        created_at = getattr(getattr(streamer, "stream", None), "created_at", None)
+        if created_at not in [None, ""]:
+            return self._format_timestamp_date(created_at)
+
+        watch_streak_cache = getattr(self, "watch_streak_cache", None)
+        account_name = getattr(self, "username", None)
+        if watch_streak_cache is None:
+            return "..."
+
+        try:
+            status = watch_streak_cache.get_streamer_status(
+                streamer.username,
+                account_name=account_name,
+            )
+            candidate_timestamps: list[float] = []
+            if (
+                status is not None
+                and getattr(status, "last_stream_started_at", None) not in [None, ""]
+            ):
+                candidate_timestamps.append(float(status.last_stream_started_at))
+
+            latest_session = watch_streak_cache.latest_session_for_streamer(
+                streamer.username,
+                account_name=account_name,
+            )
+            if latest_session is not None and latest_session.started_at not in [None, ""]:
+                candidate_timestamps.append(float(latest_session.started_at))
+
+            if candidate_timestamps:
+                return self._format_timestamp_date(max(candidate_timestamps))
+        except Exception:
+            return "..."
+        return "..."
+
+    def _history_points_total(self, streamer: Streamer) -> int:
+        history = getattr(streamer, "history", {})
+        if not isinstance(history, dict):
+            return 0
+
+        total = 0
+        for entry in history.values():
+            if not isinstance(entry, dict):
+                continue
+            amount = entry.get("amount", 0)
+            if isinstance(amount, (int, float)):
+                total += int(amount)
+        return max(0, total)
+
+    def _reset_daily_points_baseline_if_needed(self) -> None:
+        day_key = datetime.now().strftime("%Y-%m-%d")
+        if day_key != self.daily_points_day_key:
+            self.daily_points_day_key = day_key
+            self.daily_points_baseline = {}
+
+    def _points_gained(self, streamer: Streamer) -> int:
+        self._reset_daily_points_baseline_if_needed()
+
+        current_total = self._history_points_total(streamer)
+        baseline = self.daily_points_baseline.get(streamer.username)
+        if baseline is None:
+            self.daily_points_baseline[streamer.username] = current_total
+            return 0
+
+        return max(0, int(current_total - baseline))
+
     def _watch_streak_days(self, streamer: Streamer) -> int:
         watch_streak_cache = getattr(self, "watch_streak_cache", None)
         if watch_streak_cache is None:
@@ -288,6 +397,16 @@ class TwitchChannelPointsMiner:
 
         account_name = getattr(self, "username", None)
         try:
+            status = watch_streak_cache.get_streamer_status(
+                streamer.username,
+                account_name=account_name,
+            )
+            if (
+                status is not None
+                and getattr(status, "watch_streak_days", None) not in [None, ""]
+            ):
+                return max(0, int(status.watch_streak_days))
+
             days = watch_streak_cache.claimed_streak_days(
                 streamer.username,
                 account_name=account_name,
@@ -321,13 +440,19 @@ class TwitchChannelPointsMiner:
                     "Followdate": self._format_followdate(
                         self.streamer_follow_dates.get(streamer.username)
                     ),
+                    "Last Stream": self._last_stream_date(streamer),
                     "Sub (yes/no)": self._format_sub(streamer),
-                    "Watch streak days": self._watch_streak_days(streamer),
+                    "Banned (yes/no)": self._format_yes_no(
+                        getattr(streamer, "chat_banned", False)
+                    ),
+                    "Watchstreaks": self._watch_streak_days(streamer),
+                    "Points gained": self._points_gained(streamer),
                 }
             )
         return rows
 
     def _write_streamers_xlsx(self, rows: list[dict[str, str]]) -> None:
+        self._refresh_streamers_export_path_if_needed()
         output_dir = os.path.dirname(self.streamers_export_path) or "."
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -337,8 +462,11 @@ class TwitchChannelPointsMiner:
                 "Streamer",
                 "Points",
                 "Followdate",
+                "Last Stream",
                 "Sub (yes/no)",
-                "Watch streak days",
+                "Banned (yes/no)",
+                "Watchstreaks",
+                "Points gained",
             ],
         )
 
@@ -357,6 +485,7 @@ class TwitchChannelPointsMiner:
             for col_idx in range(1, sheet.max_column + 1):
                 header_cell = sheet.cell(row=1, column=col_idx)
                 header_cell.font = Font(bold=True)
+                header_cell.alignment = Alignment(horizontal="center")
 
                 max_length = len(str(header_cell.value or ""))
                 for row_idx in range(2, sheet.max_row + 1):
@@ -376,11 +505,6 @@ class TwitchChannelPointsMiner:
         try:
             rows = self._build_streamer_export_rows()
             self._write_streamers_xlsx(rows)
-            logger.info(
-                "Updated streamers export: %s",
-                self.streamers_export_path,
-                extra={"emoji": ":bar_chart:"},
-            )
         except Exception as exc:
             logger.warning(
                 "Failed to update streamers export %s: %s",
@@ -561,6 +685,7 @@ class TwitchChannelPointsMiner:
                             and streamer.stream.watch_streak_missing is False
                         ),
                         is_online=bool(streamer.is_online),
+                        last_stream_started_at=getattr(streamer.stream, "created_at", None),
                         broadcast_id=(
                             streamer.stream.broadcast_id if streamer.is_online else None
                         ),

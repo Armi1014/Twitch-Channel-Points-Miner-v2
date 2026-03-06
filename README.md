@@ -34,7 +34,7 @@ python run.py
 - Clear favorite priority flow with `Priority.FAVORITE` + `favorite=True`.
 - Reduced log spam for recurring transient timeout patterns.
 
-### Startup Performance (Sample)
+### Startup Performance
 
 - Upstream sample startup: `2m 59s` (`179s`)
 - This fork sample startup: `14s`

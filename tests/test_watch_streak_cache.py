@@ -139,6 +139,8 @@ class WatchStreakCacheTest(unittest.TestCase):
             cache.set_streamer_status(
                 "online_detected",
                 watch_streak_detected=True,
+                watch_streak_days=7,
+                last_stream_started_at=now - 120,
                 is_online=True,
                 broadcast_id="broadcast-1",
                 checked_at=now,
@@ -162,6 +164,8 @@ class WatchStreakCacheTest(unittest.TestCase):
 
             self.assertIsNotNone(online)
             self.assertTrue(online.watch_streak_detected)
+            self.assertEqual(online.watch_streak_days, 7)
+            self.assertEqual(online.last_stream_started_at, now - 120)
             self.assertTrue(online.is_online)
             self.assertEqual(online.broadcast_id, "broadcast-1")
 
@@ -169,6 +173,33 @@ class WatchStreakCacheTest(unittest.TestCase):
             self.assertFalse(offline.watch_streak_detected)
             self.assertFalse(offline.is_online)
             self.assertIsNone(offline.broadcast_id)
+
+    def test_set_streamer_status_keeps_existing_metadata_when_not_provided(self):
+        now = time.time()
+        cache = WatchStreakCache(default_account_name="acc_one")
+
+        cache.set_streamer_status(
+            "demo",
+            watch_streak_detected=True,
+            watch_streak_days=9,
+            last_stream_started_at=now - 300,
+            is_online=True,
+            broadcast_id="broadcast-1",
+            checked_at=now,
+        )
+
+        cache.set_streamer_status(
+            "demo",
+            watch_streak_detected=False,
+            is_online=False,
+            broadcast_id=None,
+            checked_at=now + 10,
+        )
+
+        status = cache.get_streamer_status("demo")
+        self.assertIsNotNone(status)
+        self.assertEqual(status.watch_streak_days, 9)
+        self.assertEqual(status.last_stream_started_at, now - 300)
 
     def test_streamer_statuses_respect_account_filter(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

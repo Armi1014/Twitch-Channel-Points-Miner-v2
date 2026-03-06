@@ -99,6 +99,67 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIn("createdAt", stream_info["stream"])
         self.assertFalse(stream_info.get("watchStreakMissing", True))
 
+    def test_get_stream_info_extracts_watch_streak_days(self):
+        twitch = Twitch("milestone-days-test", "ua")
+        streamer = self._make_streamer("streamer")
+
+        responses = {
+            "VideoPlayerStreamInfoOverlayChannel": {
+                "data": {
+                    "user": {
+                        "stream": {
+                            "id": "broadcast-days-1",
+                            "tags": [],
+                            "viewersCount": 42,
+                            "createdAt": "2026-03-01T10:00:00Z",
+                        }
+                    }
+                }
+            },
+            "RewardList": {
+                "data": {
+                    "channel": {
+                        "self": {
+                            "watchStreakMilestone": {
+                                "watchStreakMilestone": {
+                                    "watchStreakDays": 26,
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            stream_info = twitch.get_stream_info(streamer)
+
+        self.assertIsNotNone(stream_info)
+        self.assertEqual(stream_info.get("watchStreakDays"), 26)
+
+    def test_extract_watch_streak_days_prefers_watch_streak_days_field(self):
+        twitch = Twitch("milestone-days-priority", "ua")
+        response = {
+            "data": {
+                "channel": {
+                    "self": {
+                        "watchStreakMilestone": {
+                            "watchStreakMilestone": {
+                                "currentDay": 3,
+                                "watchStreakDays": 26,
+                                "dayCount": 7,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.assertEqual(twitch._extract_watch_streak_days(response), 26)
+
     def test_get_stream_info_handles_null_reward_list_channel_without_crashing(self):
         twitch = Twitch("milestone-null-channel", "ua")
         streamer = self._make_streamer("streamer")
@@ -201,6 +262,55 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(session)
         self.assertTrue(session.claimed)
         self.assertFalse(streamer.stream.watch_streak_missing)
+
+    def test_update_stream_persists_watch_streak_days_in_status_cache(self):
+        twitch = Twitch("milestone-days-cache", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-days-cache")
+        streamer = self._make_streamer("streamer")
+        Settings.logger = SimpleNamespace(less=True)
+
+        responses = {
+            "VideoPlayerStreamInfoOverlayChannel": {
+                "data": {
+                    "user": {
+                        "stream": {
+                            "id": "broadcast-days-cache-1",
+                            "tags": [],
+                            "viewersCount": 21,
+                            "createdAt": "2026-03-01T10:00:00Z",
+                        },
+                        "broadcastSettings": {"title": "title", "game": {}},
+                    }
+                }
+            },
+            "RewardList": {
+                "data": {
+                    "channel": {
+                        "self": {
+                            "watchStreakMilestone": {
+                                "watchStreakMilestone": {
+                                    "watchStreakDays": 31,
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            updated = twitch.update_stream(streamer)
+
+        self.assertTrue(updated)
+        status = twitch.watch_streak_cache.get_streamer_status(
+            streamer.username,
+            account_name=twitch.account_username,
+        )
+        self.assertIsNotNone(status)
+        self.assertEqual(status.watch_streak_days, 31)
 
     def test_update_stream_logs_detected_watch_streak_even_for_preclaimed_session(self):
         twitch = Twitch("milestone-preclaimed", "ua")

@@ -10,7 +10,7 @@ from TwitchChannelPointsMiner.utils import dump_json
 
 logger = logging.getLogger(__name__)
 
-WATCH_STREAK_CACHE_VERSION = 3
+WATCH_STREAK_CACHE_VERSION = 4
 MIN_OFFLINE_FOR_NEW_STREAK = 30 * 60  # 30 minutes
 MAX_STREAK_ATTEMPTS_PER_BROADCAST = 2
 STALE_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60  # drop ended sessions after a week
@@ -76,6 +76,8 @@ class StreamerWatchStreakStatus:
     account_name: str
     streamer_login: str
     watch_streak_detected: bool = False
+    watch_streak_days: int | None = None
+    last_stream_started_at: float | None = None
     is_online: bool = False
     broadcast_id: str | None = None
     checked_at: float | None = None
@@ -88,6 +90,8 @@ class StreamerWatchStreakStatus:
             "account_name": self.account_name,
             "streamer_login": self.streamer_login,
             "watch_streak_detected": self.watch_streak_detected,
+            "watch_streak_days": self.watch_streak_days,
+            "last_stream_started_at": self.last_stream_started_at,
             "is_online": self.is_online,
             "broadcast_id": self.broadcast_id,
             "checked_at": self.checked_at,
@@ -99,6 +103,16 @@ class StreamerWatchStreakStatus:
             account_name=str(data.get("account_name", "")),
             streamer_login=str(data.get("streamer_login", "")),
             watch_streak_detected=bool(data.get("watch_streak_detected", False)),
+            watch_streak_days=(
+                max(0, int(data.get("watch_streak_days")))
+                if data.get("watch_streak_days") not in [None, ""]
+                else None
+            ),
+            last_stream_started_at=(
+                float(data["last_stream_started_at"])
+                if data.get("last_stream_started_at") not in [None, ""]
+                else None
+            ),
             is_online=bool(data.get("is_online", False)),
             broadcast_id=(
                 str(data.get("broadcast_id"))
@@ -244,6 +258,8 @@ class WatchStreakCache:
         streamer_login: str,
         watch_streak_detected: bool,
         is_online: bool,
+        watch_streak_days: int | None = None,
+        last_stream_started_at: float | None = None,
         broadcast_id: str | None = None,
         checked_at: float | None = None,
         account_name: str | None = None,
@@ -251,6 +267,16 @@ class WatchStreakCache:
         account = self._resolve_account(account_name)
         checked_at = time.time() if checked_at is None else checked_at
         key = self._status_key(account, streamer_login)
+        normalized_watch_streak_days = (
+            max(0, int(watch_streak_days))
+            if watch_streak_days not in [None, ""]
+            else None
+        )
+        normalized_last_stream_started_at = (
+            float(last_stream_started_at)
+            if last_stream_started_at not in [None, ""]
+            else None
+        )
         normalized_broadcast_id = (
             str(broadcast_id) if broadcast_id not in [None, ""] else None
         )
@@ -261,6 +287,8 @@ class WatchStreakCache:
                     account_name=account,
                     streamer_login=streamer_login,
                     watch_streak_detected=bool(watch_streak_detected),
+                    watch_streak_days=normalized_watch_streak_days,
+                    last_stream_started_at=normalized_last_stream_started_at,
                     is_online=bool(is_online),
                     broadcast_id=normalized_broadcast_id,
                     checked_at=checked_at,
@@ -269,14 +297,29 @@ class WatchStreakCache:
                 self._dirty = True
                 return status
 
+            next_watch_streak_days = (
+                status.watch_streak_days
+                if normalized_watch_streak_days is None
+                else normalized_watch_streak_days
+            )
+            next_last_stream_started_at = (
+                status.last_stream_started_at
+                if normalized_last_stream_started_at is None
+                else normalized_last_stream_started_at
+            )
+
             changed = (
                 status.watch_streak_detected != bool(watch_streak_detected)
+                or status.watch_streak_days != next_watch_streak_days
+                or status.last_stream_started_at != next_last_stream_started_at
                 or status.is_online != bool(is_online)
                 or status.broadcast_id != normalized_broadcast_id
                 or status.checked_at != checked_at
             )
             if changed:
                 status.watch_streak_detected = bool(watch_streak_detected)
+                status.watch_streak_days = next_watch_streak_days
+                status.last_stream_started_at = next_last_stream_started_at
                 status.is_online = bool(is_online)
                 status.broadcast_id = normalized_broadcast_id
                 status.checked_at = checked_at
