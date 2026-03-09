@@ -116,12 +116,12 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(rows[0]["Last Stream"], "04.03.2026")
             self.assertEqual(rows[1]["Last Stream"], "06.03.2026")
             self.assertEqual(rows[2]["Last Stream"], "05.03.2026")
-            self.assertEqual(rows[0]["Sub (yes/no)"], "yes")
-            self.assertEqual(rows[1]["Sub (yes/no)"], "no")
-            self.assertEqual(rows[2]["Sub (yes/no)"], "yes")
-            self.assertEqual(rows[0]["Banned (yes/no)"], "yes")
-            self.assertEqual(rows[1]["Banned (yes/no)"], "no")
-            self.assertEqual(rows[2]["Banned (yes/no)"], "no")
+            self.assertEqual(rows[0]["Sub"], "yes")
+            self.assertEqual(rows[1]["Sub"], "no")
+            self.assertEqual(rows[2]["Sub"], "yes")
+            self.assertEqual(rows[0]["Banned"], "yes")
+            self.assertEqual(rows[1]["Banned"], "no")
+            self.assertEqual(rows[2]["Banned"], "no")
             self.assertEqual(rows[0]["Watchstreaks"], 12)
             self.assertEqual(rows[1]["Watchstreaks"], 0)
             self.assertEqual(rows[2]["Watchstreaks"], 0)
@@ -272,7 +272,7 @@ class StreamersExportTest(unittest.TestCase):
 
             rows = miner._build_streamer_export_rows()
 
-            self.assertEqual(rows[0]["Banned (yes/no)"], "yes")
+            self.assertEqual(rows[0]["Banned"], "yes")
             miner.twitch.get_chat_ban_status.assert_called_once_with(streamer)
             self.assertTrue(streamer.chat_banned)
 
@@ -325,8 +325,8 @@ class StreamersExportTest(unittest.TestCase):
                     "Points": "184.88k",
                     "Followdate": "21.07.2025",
                     "Last Stream": "04.03.2026",
-                    "Sub (yes/no)": "yes",
-                    "Banned (yes/no)": "yes",
+                    "Sub": "yes",
+                    "Banned": "yes",
                     "Watchstreaks": 26,
                     "Points gained": 460,
                 }
@@ -377,7 +377,7 @@ class StreamersExportTest(unittest.TestCase):
             self.assertGreater(sheet.column_dimensions["D"].width, len("Last Stream"))
             self.assertGreater(
                 sheet.column_dimensions["F"].width,
-                len("Banned (yes/no)"),
+                len("Banned"),
             )
             self.assertGreater(
                 sheet.column_dimensions["G"].width,
@@ -401,8 +401,8 @@ class StreamersExportTest(unittest.TestCase):
                     "Points": "184.88k",
                     "Followdate": "21.07.2025",
                     "Last Stream": "04.03.2026",
-                    "Sub (yes/no)": "yes",
-                    "Banned (yes/no)": "yes",
+                    "Sub": "yes",
+                    "Banned": "yes",
                     "Watchstreaks": 26,
                     "Points gained": 460,
                 }
@@ -430,8 +430,8 @@ class StreamersExportTest(unittest.TestCase):
                     "Points": "1.20k",
                     "Followdate": "21.07.2025",
                     "Last Stream": "04.03.2026",
-                    "Sub (yes/no)": "no",
-                    "Banned (yes/no)": "no",
+                    "Sub": "no",
+                    "Banned": "no",
                     "Watchstreaks": 0,
                     "Points gained": 0,
                 }

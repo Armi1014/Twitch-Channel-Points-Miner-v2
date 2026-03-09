@@ -90,6 +90,7 @@ class Streamer(object):
         "viewer_is_mod",
         "activeMultipliers",
         "subscription_tier",
+        "channel_points_context_at",
         "irc_chat",
         "stream",
         "raid",
@@ -117,6 +118,7 @@ class Streamer(object):
         self.viewer_is_mod = False
         self.activeMultipliers = None
         self.subscription_tier = None
+        self.channel_points_context_at = 0.0
         self.irc_chat = None
 
         self.stream = Stream()

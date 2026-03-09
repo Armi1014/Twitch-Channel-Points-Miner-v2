@@ -56,7 +56,7 @@ By default, the report is written to:
 ### What do the main export columns mean?
 
 - `Last Stream`: latest known stream date from live data or cached streak status
-- `Banned (yes/no)`: whether your account is currently chat-banned in that channel
+- `Banned`: whether your account is currently chat-banned in that channel
 - `Watchstreaks`: the streak day count Twitch reports when available
 - `Points gained`: points gained for the current day relative to that day's first seen total
 

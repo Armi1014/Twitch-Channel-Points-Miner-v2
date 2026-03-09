@@ -630,8 +630,8 @@ class TwitchChannelPointsMiner:
                         self.streamer_follow_dates.get(streamer.username)
                     ),
                     "Last Stream": self._last_stream_date(streamer),
-                    "Sub (yes/no)": self._format_sub(streamer),
-                    "Banned (yes/no)": self._format_yes_no(
+                    "Sub": self._format_sub(streamer),
+                    "Banned": self._format_yes_no(
                         self._fetch_chat_ban_status_from_twitch(streamer)
                     ),
                     "Watchstreaks": self._watch_streak_days(streamer),
@@ -653,8 +653,8 @@ class TwitchChannelPointsMiner:
                 "Points",
                 "Followdate",
                 "Last Stream",
-                "Sub (yes/no)",
-                "Banned (yes/no)",
+                "Sub",
+                "Banned",
                 "Watchstreaks",
                 "Points gained",
             ],
@@ -717,8 +717,8 @@ class TwitchChannelPointsMiner:
         points_idx = header_names.get("Points")
         followdate_idx = header_names.get("Followdate")
         last_stream_idx = header_names.get("Last Stream")
-        sub_idx = header_names.get("Sub (yes/no)")
-        banned_idx = header_names.get("Banned (yes/no)")
+        sub_idx = header_names.get("Sub")
+        banned_idx = header_names.get("Banned")
         watch_idx = header_names.get("Watchstreaks")
         gained_idx = header_names.get("Points gained")
         max_points_gained = 0
@@ -802,8 +802,8 @@ class TwitchChannelPointsMiner:
             "Points": (10, 12),
             "Followdate": (13, 14),
             "Last Stream": (13, 14),
-            "Sub (yes/no)": (13, 14),
-            "Banned (yes/no)": (15, 18),
+            "Sub": (8, 10),
+            "Banned": (10, 12),
             "Watchstreaks": (14, 16),
             "Points gained": (14, 15),
         }

@@ -68,6 +68,7 @@ GQL_REQUEST_WARNING_TTL = 5 * 60  # seconds
 STREAK_MIN_SECONDS = 5 * 60  # Qualifying watch time before attempting a streak
 STREAK_WATCH_EVENTS_TARGET = 2
 STREAK_ATTEMPT_TIMEOUT_SECONDS = 12 * 60
+SUBSCRIPTION_CONTEXT_REFRESH_SECONDS = 120
 CLIENT_VERSION_REFRESH_TTL = 10 * 60  # Avoid refetching client version on every GQL call
 CLIENT_VERSION_ERROR_LOG_TTL = 5 * 60
 HTTP_RETRY_ATTEMPTS = 3
@@ -1756,6 +1757,7 @@ class Twitch(object):
                 we temporarily fan out (optionally capped by watch_streak_max_parallel)
                 so each live streamer gets a shot.
                 """
+                self._refresh_selection_context(streamers, streamers_index, priority)
                 streamers_watching = self._select_streamers_to_watch(
                     streamers, streamers_index, priority
                 )
@@ -1939,6 +1941,25 @@ class Twitch(object):
                     "Exception raised in send minute watched", exc_info=True)
 
     # === CHANNEL POINTS / PREDICTION === #
+    def _refresh_selection_context(self, streamers, streamers_index, priority):
+        if Priority.SUBSCRIBED not in (priority or []):
+            return
+
+        now = time.time()
+        for index in streamers_index:
+            streamer = streamers[index]
+            last_refresh = getattr(streamer, "channel_points_context_at", 0.0) or 0.0
+            if last_refresh and (now - last_refresh) < SUBSCRIPTION_CONTEXT_REFRESH_SECONDS:
+                continue
+            try:
+                self.load_channel_points_context(streamer)
+            except Exception:
+                logger.debug(
+                    "Failed to refresh subscription context for %s during selection",
+                    streamer.username,
+                    exc_info=True,
+                )
+
     # Load the amount of current points for a channel, check if a bonus is available
     def load_channel_points_context(self, streamer):
         json_data = copy.deepcopy(GQLOperations.ChannelPointsContext)
@@ -1954,6 +1975,8 @@ class Twitch(object):
 
         if channel is None:
             raise StreamerDoesNotExistException
+
+        streamer.channel_points_context_at = time.time()
 
         community_points = (
             channel.get("self", {}).get("communityPoints")

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.classes.Settings import Priority
@@ -71,6 +72,52 @@ class PrioritySelectionTest(unittest.TestCase):
 
         self.assertEqual(len(selection), 1)
         self.assertEqual(streamers[selection[0]].username, "eligible")
+
+    def test_refresh_selection_context_updates_newly_subscribed_streamer(self):
+        twitch = Twitch("self-check", "ua")
+        priorities = [Priority.SUBSCRIBED, Priority.POINTS_ASCENDING]
+
+        def make_streamer(name, points, subscribed=False):
+            settings = StreamerSettings(
+                watch_streak=False,
+                claim_drops=False,
+                claim_moments=False,
+                make_predictions=False,
+                follow_raid=False,
+                community_goals=False,
+            )
+            streamer = Streamer(name, settings=settings)
+            streamer.channel_points = points
+            streamer.activeMultipliers = [{"factor": 2.0}] if subscribed else None
+            streamer.is_online = True
+            return streamer
+
+        newly_subscribed = make_streamer("newsub", 50, subscribed=False)
+        already_subscribed = make_streamer("oldsub", 100, subscribed=True)
+        other = make_streamer("other", 10, subscribed=False)
+        streamers = [newly_subscribed, already_subscribed, other]
+
+        def refresh_side_effect(_self, streamer):
+            if streamer.username == "newsub":
+                streamer.activeMultipliers = [{"factor": 2.0}]
+                streamer.subscription_tier = 1
+            streamer.channel_points_context_at = 999999.0
+
+        with patch.object(
+            Twitch,
+            "load_channel_points_context",
+            autospec=True,
+            side_effect=refresh_side_effect,
+        ):
+            twitch._refresh_selection_context(streamers, [0, 1, 2], priorities)
+            selection = twitch._select_streamers_to_watch(
+                streamers, [0, 1, 2], priorities
+            )
+
+        self.assertEqual(
+            [streamers[index].username for index in selection],
+            ["newsub", "oldsub"],
+        )
 
 
 if __name__ == "__main__":
