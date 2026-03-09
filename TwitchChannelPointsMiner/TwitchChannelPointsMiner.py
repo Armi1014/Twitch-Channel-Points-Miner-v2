@@ -17,8 +17,10 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.formatting.rule import DataBarRule
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
@@ -96,6 +98,8 @@ class TwitchChannelPointsMiner:
         "daily_points_baseline_path",
         "daily_points_day_key",
         "daily_points_baseline",
+        "daily_points_snapshot",
+        "daily_points_session_anchor",
         "_daily_points_baseline_dirty",
         "_watch_streak_days_lookup_attempted",
         "_chat_ban_lookup_attempted",
@@ -198,6 +202,8 @@ class TwitchChannelPointsMiner:
         )
         self.daily_points_day_key = datetime.now().strftime("%Y-%m-%d")
         self.daily_points_baseline = {}
+        self.daily_points_snapshot = {}
+        self.daily_points_session_anchor = {}
         self._daily_points_baseline_dirty = False
         self._watch_streak_days_lookup_attempted = set()
         self._chat_ban_lookup_attempted = set()
@@ -391,6 +397,8 @@ class TwitchChannelPointsMiner:
         if day_key != self.daily_points_day_key:
             self.daily_points_day_key = day_key
             self.daily_points_baseline = {}
+            self.daily_points_snapshot = {}
+            self.daily_points_session_anchor = {}
             self._daily_points_baseline_dirty = True
 
     def _load_daily_points_baseline(self) -> None:
@@ -398,6 +406,8 @@ class TwitchChannelPointsMiner:
         today = datetime.now().strftime("%Y-%m-%d")
         self.daily_points_day_key = today
         self.daily_points_baseline = {}
+        self.daily_points_snapshot = {}
+        self.daily_points_session_anchor = {}
         self._daily_points_baseline_dirty = False
         if not path:
             return
@@ -408,17 +418,26 @@ class TwitchChannelPointsMiner:
         if payload.get("day_key") != today:
             return
 
-        baseline = payload.get("baseline")
-        if not isinstance(baseline, dict):
+        stored_points = payload.get("points_gained")
+        if not isinstance(stored_points, dict):
+            legacy_baseline = payload.get("baseline")
+            if isinstance(legacy_baseline, dict):
+                logger.info(
+                    "Ignoring legacy daily points baseline file %s; a new daily points snapshot will be written on the next export.",
+                    path,
+                )
+            return
+        if not isinstance(stored_points, dict):
             return
 
         normalized_baseline = {}
-        for username, value in baseline.items():
+        for username, value in stored_points.items():
             try:
                 normalized_baseline[str(username)] = max(0, int(value))
             except Exception:
                 continue
         self.daily_points_baseline = normalized_baseline
+        self.daily_points_snapshot = dict(normalized_baseline)
 
     def _save_daily_points_baseline_if_dirty(self) -> None:
         if not getattr(self, "_daily_points_baseline_dirty", False):
@@ -430,8 +449,9 @@ class TwitchChannelPointsMiner:
         dump_json(
             path,
             {
+                "schema_version": 2,
                 "day_key": self.daily_points_day_key,
-                "baseline": self.daily_points_baseline,
+                "points_gained": self.daily_points_snapshot,
             },
         )
         self._daily_points_baseline_dirty = False
@@ -440,13 +460,30 @@ class TwitchChannelPointsMiner:
         self._reset_daily_points_baseline_if_needed()
 
         current_total = self._history_points_total(streamer)
-        baseline = self.daily_points_baseline.get(streamer.username)
-        if baseline is None:
-            self.daily_points_baseline[streamer.username] = current_total
-            self._daily_points_baseline_dirty = True
-            return 0
+        username = streamer.username
+        carried_total = max(0, int(self.daily_points_baseline.get(username, 0)))
+        anchor = self.daily_points_session_anchor.get(username)
+        if anchor is None:
+            self.daily_points_session_anchor[username] = current_total
+            return carried_total
 
-        return max(0, int(current_total - baseline))
+        session_delta = max(0, int(current_total - anchor))
+        return max(0, int(carried_total + session_delta))
+
+    def _sync_daily_points_snapshot(self, rows: list[dict[str, str]]) -> None:
+        snapshot = {}
+        for row in rows:
+            username = str(row.get("Streamer", "")).strip()
+            if not username:
+                continue
+            try:
+                snapshot[username] = max(0, int(row.get("Points gained", 0)))
+            except Exception:
+                snapshot[username] = 0
+
+        if snapshot != self.daily_points_snapshot:
+            self.daily_points_snapshot = snapshot
+            self._daily_points_baseline_dirty = True
 
     def _fetch_watch_streak_days_from_twitch(self, streamer: Streamer) -> int | None:
         twitch = getattr(self, "twitch", None)
@@ -601,6 +638,7 @@ class TwitchChannelPointsMiner:
                     "Points gained": self._points_gained(streamer),
                 }
             )
+        self._sync_daily_points_snapshot(rows)
         return rows
 
     def _write_streamers_xlsx(self, rows: list[dict[str, str]]) -> None:
@@ -632,26 +670,161 @@ class TwitchChannelPointsMiner:
             data_frame.to_excel(tmp_path, index=False, engine="openpyxl")
             workbook = load_workbook(tmp_path)
             sheet = workbook.active
-
-            # Make header row bold and autosize each used column.
-            for col_idx in range(1, sheet.max_column + 1):
-                header_cell = sheet.cell(row=1, column=col_idx)
-                header_cell.font = Font(bold=True)
-                header_cell.alignment = Alignment(horizontal="center")
-
-                max_length = len(str(header_cell.value or ""))
-                for row_idx in range(2, sheet.max_row + 1):
-                    value = sheet.cell(row=row_idx, column=col_idx).value
-                    if value is None:
-                        continue
-                    max_length = max(max_length, len(str(value)))
-                sheet.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
+            self._style_streamers_export_sheet(sheet)
 
             workbook.save(tmp_path)
             os.replace(tmp_path, self.streamers_export_path)
         finally:
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
+
+    def _style_streamers_export_sheet(self, sheet) -> None:
+        header_fill = PatternFill("solid", fgColor="1F4E78")
+        alert_fill = PatternFill("solid", fgColor="FDECEA")
+        success_fill = PatternFill("solid", fgColor="E8F5E9")
+        soft_success_fill = PatternFill("solid", fgColor="F1F8E9")
+
+        header_row = 1
+        header_names = {}
+        for col_idx in range(1, sheet.max_column + 1):
+            header_cell = sheet.cell(row=header_row, column=col_idx)
+            header_name = str(header_cell.value or "")
+            header_names[header_name] = col_idx
+            header_cell.font = Font(bold=True, color="FFFFFF")
+            header_cell.fill = header_fill
+            header_cell.alignment = Alignment(horizontal="center", vertical="center")
+        sheet.row_dimensions[header_row].height = 22
+
+        sheet.freeze_panes = "A2"
+
+        for header_name in ("Followdate", "Last Stream"):
+            col_idx = header_names.get(header_name)
+            if col_idx is None:
+                continue
+            for row_idx in range(2, sheet.max_row + 1):
+                cell = sheet.cell(row=row_idx, column=col_idx)
+                if cell.value in [None, "", "..."]:
+                    cell.value = None if cell.value == "..." else cell.value
+                    continue
+                if isinstance(cell.value, str):
+                    try:
+                        parsed = datetime.strptime(cell.value, "%d.%m.%Y").date()
+                    except ValueError:
+                        continue
+                    cell.value = parsed
+                cell.number_format = "DD.MM.YYYY"
+
+        points_idx = header_names.get("Points")
+        followdate_idx = header_names.get("Followdate")
+        last_stream_idx = header_names.get("Last Stream")
+        sub_idx = header_names.get("Sub (yes/no)")
+        banned_idx = header_names.get("Banned (yes/no)")
+        watch_idx = header_names.get("Watchstreaks")
+        gained_idx = header_names.get("Points gained")
+        max_points_gained = 0
+
+        for row_idx in range(2, sheet.max_row + 1):
+            if points_idx is not None:
+                sheet.cell(row=row_idx, column=points_idx).alignment = Alignment(
+                    horizontal="right", vertical="center"
+                )
+            if gained_idx is not None:
+                gained_cell = sheet.cell(row=row_idx, column=gained_idx)
+                gained_cell.alignment = Alignment(
+                    horizontal="right", vertical="center"
+                )
+                if isinstance(gained_cell.value, (int, float)):
+                    max_points_gained = max(max_points_gained, int(gained_cell.value))
+                if isinstance(gained_cell.value, (int, float)) and gained_cell.value > 0:
+                    gained_cell.font = Font(color="2E7D32", bold=True)
+                    gained_cell.fill = soft_success_fill
+            if followdate_idx is not None:
+                sheet.cell(row=row_idx, column=followdate_idx).alignment = Alignment(
+                    horizontal="center", vertical="center"
+                )
+            if last_stream_idx is not None:
+                sheet.cell(row=row_idx, column=last_stream_idx).alignment = Alignment(
+                    horizontal="center", vertical="center"
+                )
+            if sub_idx is not None:
+                sheet.cell(row=row_idx, column=sub_idx).alignment = Alignment(
+                    horizontal="center", vertical="center"
+                )
+            if banned_idx is not None:
+                banned_cell = sheet.cell(row=row_idx, column=banned_idx)
+                banned_cell.alignment = Alignment(
+                    horizontal="center", vertical="center"
+                )
+                if str(banned_cell.value or "").lower() == "yes":
+                    banned_cell.font = Font(color="C62828", bold=True)
+                    banned_cell.fill = alert_fill
+            if watch_idx is not None:
+                watch_cell = sheet.cell(row=row_idx, column=watch_idx)
+                watch_cell.alignment = Alignment(
+                    horizontal="center", vertical="center"
+                )
+                if isinstance(watch_cell.value, (int, float)) and watch_cell.value >= 3:
+                    watch_cell.font = Font(color="2E7D32", bold=True)
+                    watch_cell.fill = success_fill
+                elif isinstance(watch_cell.value, (int, float)) and watch_cell.value > 0:
+                    watch_cell.font = Font(color="2E7D32")
+
+        data_ref = f"A1:{get_column_letter(sheet.max_column)}{sheet.max_row}"
+
+        if sheet.max_row >= 2:
+            table = Table(displayName="StreamersExportTable", ref=data_ref)
+            table.tableStyleInfo = TableStyleInfo(
+                name="TableStyleMedium2",
+                showFirstColumn=False,
+                showLastColumn=False,
+                showRowStripes=True,
+                showColumnStripes=False,
+            )
+            sheet.add_table(table)
+
+            if gained_idx is not None and max_points_gained > 0:
+                gained_column_letter = get_column_letter(gained_idx)
+                gained_range = f"{gained_column_letter}2:{gained_column_letter}{sheet.max_row}"
+                sheet.conditional_formatting.add(
+                    gained_range,
+                    DataBarRule(
+                        start_type="num",
+                        start_value=0,
+                        end_type="max",
+                        end_value=0,
+                        color="63C384",
+                        showValue=True,
+                    ),
+                )
+
+        column_widths = {
+            "Streamer": (18, 30),
+            "Points": (10, 12),
+            "Followdate": (13, 14),
+            "Last Stream": (13, 14),
+            "Sub (yes/no)": (13, 14),
+            "Banned (yes/no)": (15, 18),
+            "Watchstreaks": (14, 16),
+            "Points gained": (14, 15),
+        }
+
+        for col_idx in range(1, sheet.max_column + 1):
+            header_name = str(sheet.cell(row=1, column=col_idx).value or "")
+            max_length = len(header_name)
+            for row_idx in range(2, sheet.max_row + 1):
+                value = sheet.cell(row=row_idx, column=col_idx).value
+                if value is None:
+                    continue
+                if hasattr(value, "strftime"):
+                    cell_text = value.strftime("%d.%m.%Y")
+                else:
+                    cell_text = str(value)
+                max_length = max(max_length, len(cell_text))
+            min_width, max_width = column_widths.get(header_name, (10, 20))
+            desired_width = max(max_length + 2, min_width)
+            sheet.column_dimensions[get_column_letter(col_idx)].width = min(
+                desired_width, max_width
+            )
 
     def _export_streamers_snapshot(self) -> None:
         try:
