@@ -1,105 +1,84 @@
 # Twitch Channel Points Miner (Armi1014 Fork)
 
-Stability-focused fork of `Twitch-Channel-Points-Miner-v2` with stronger streak reliability, cleaner priority behavior, and less transient log noise.
+A **reliability-first fork** of `Twitch-Channel-Points-Miner-v2`.
 
-## Quick Start (60 Seconds)
+Built for people who want:
+- **better watch streak reliability**
+- **cleaner favorite / priority behavior**
+- **faster startup in real use**
+- **less transient Twitch/API/network log noise**
 
-1. Clone and enter the repo:
+If upstream mostly works for you but occasionally behaves weirdly, this fork is meant to be the **more practical, more stable version**.
+It also aims to be the **faster fork in day-to-day use**, especially during startup and early channel refreshes.
+
+> Not affiliated with Twitch. Use at your own risk.
+
+## Quick Start
+
+If you are coming from upstream, one of the first things you should notice is that this fork is tuned to spend less time stuck in slow startup behavior before it becomes usable.
 
 ```sh
 git clone https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2
 cd Twitch-Channel-Points-Miner-v2
-```
-
-2. Create a virtual environment and install dependencies:
-
-```sh
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
+````
 
-3. Create your runner and start:
+**Windows**
 
 ```sh
-cp example.py run.py  # Windows: copy example.py run.py
+.venv\Scripts\activate
+copy example.py run.py
+pip install -r requirements.txt
 python run.py
 ```
 
-## Why This Fork (vs Upstream)
+**Linux / macOS**
 
-- More resilient under transient Twitch/API/network issues (retry/backoff hardening).
-- More reliable watch streak handling, including already-online channels at startup.
-- Per-account streak cache (`watch_streak_cache.<account>.json`) to avoid multi-account clashes.
-- Clear favorite priority flow with `Priority.FAVORITE` + `favorite=True`.
-- Reduced log spam for recurring transient timeout patterns.
-
-### Startup Performance
-
-- Upstream sample startup: `2m 59s` (`179s`)
-- This fork sample startup: `14s`
-- Improvement: `165s` faster (`92.2%` less startup time, `~12.8x` speedup)
-
-Sample results vary by account size, network quality, and Twitch backend health.
-
-## Priority, Favorites, and Streak Setup
-
-- Twitch awards points on up to 2 streams at once.
-- With `Priority.STREAK` first, the miner tries eligible streak channels first.
-- If no streak is currently eligible, it falls back to your next priorities.
-- `Priority.FAVORITE` applies only to streamers with `favorite=True`.
-- `watch_streak=True` must be set inside `StreamerSettings(...)`, not directly on `Streamer(...)`.
-
-```python
-from TwitchChannelPointsMiner import TwitchChannelPointsMiner
-from TwitchChannelPointsMiner.classes.Settings import Priority
-from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
-
-twitch_miner = TwitchChannelPointsMiner(
-    username="your-twitch-username",
-    priority=[Priority.STREAK, Priority.FAVORITE, Priority.ORDER],
-    watch_streak_min_offline_seconds=1800,  # 1800 = 30 min default, 0 = aggressive
-)
-
-twitch_miner.mine(
-    [
-        Streamer("favorite_channel", settings=StreamerSettings(favorite=True, watch_streak=True)),
-        Streamer("streak_channel", settings=StreamerSettings(watch_streak=True)),
-        Streamer("normal_channel"),
-    ]
-)
+```sh
+source .venv/bin/activate
+cp example.py run.py
+pip install -r requirements.txt
+python run.py
 ```
 
-## FAQ
+## Why this fork
 
-### Where do I set favorites?
+Compared to upstream, this fork focuses on **reliability first**:
 
-Inside `StreamerSettings`, for example: `Streamer("name", settings=StreamerSettings(favorite=True))`.
+* better handling of transient Twitch/API/network issues
+* more reliable watch streak behavior, including already-online channels at startup
+* per-account streak cache files to avoid multi-account conflicts
+* clearer `Priority.FAVORITE` behavior
+* faster startup and less waiting during the initial refresh cycle
+* reduced recurring timeout / backend error log spam
 
-### Where do I set streak wait time?
+**Example startup improvement**
 
-In `TwitchChannelPointsMiner(...)` with `watch_streak_min_offline_seconds` (`1800` default, `0` for no offline wait).
+* upstream sample: `179s`
+* this fork sample: `14s`
+* about **12.8x faster** in that test
 
-### What happens to streamers already online at startup?
+Results vary depending on account size, network quality, and Twitch backend health.
+The exact number will vary, but faster startup is a core goal of this fork, not just a side effect.
 
-They are still checked; the miner can probe streak status for already-online channels.
+## Use this fork if...
 
-### Why is someone missing in `watch_streak_cache.<account>.json`?
+* you care more about **reliability** than staying as close as possible to upstream
+* you use **watch streaks** heavily
+* you want clearer favorite / priority behavior
+* you want the miner to become usable faster after launch
+* you want fewer annoying transient error logs
 
-That file stores streak sessions, not a full streamer list, so entries appear when a streak session is created or updated.
+## Docs
 
-### Why do I still see occasional `503` or `service timeout`?
-
-Those are usually Twitch-side backend issues; the miner retries and suppresses common spam, but cannot eliminate all upstream outages.
-
-## Links
-
-- Releases: https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2/releases
-- Full example config: [example.py](example.py)
-- Fork details: [FORK_FEATURES.md](FORK_FEATURES.md)
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Twitch docs: https://help.twitch.tv/s/article/channel-points-guide
+* [Latest Releases](https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2/releases)
+* [Example Config](example.py)
+* [Fork Features](FORK_FEATURES.md)
+* [FAQ](FAQ.md)
+* [Contributing](CONTRIBUTING.md)
 
 ## Disclaimer
 
-Use at your own risk. This project is not affiliated with Twitch.
+This project is not affiliated with Twitch.
+
+Use it at your own risk and make sure you understand the platform rules before using automation tools.
