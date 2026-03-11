@@ -79,6 +79,13 @@ STREAMERS = [
 # )
 #
 # Streamer(
+#     "high_cap_streamer",
+#     settings=StreamerSettings(
+#         points_limit=150000,  # Override the global limit for just this channel
+#     ),
+# )
+#
+# Streamer(
 #     "prediction_streamer",
 #     settings=StreamerSettings(
 #         follow_raid=False,
@@ -137,12 +144,15 @@ LOGGER_SETTINGS = LoggerSettings(
 # 5. Default behavior for all channels
 # ---------------------------------------------------------------------------
 # These defaults apply to every streamer unless that streamer overrides them.
+# `points_limit` skips channels that already have at least that many points.
+# Set it to `None` to disable the limit. Pending watch streaks still bypass it.
 DEFAULT_STREAMER_SETTINGS = StreamerSettings(
     make_predictions=True,
     follow_raid=True,
     claim_drops=True,
     claim_moments=True,
     watch_streak=True,
+    points_limit=None,
     community_goals=False,
     chat=ChatPresence.ONLINE,
     bet=BetSettings(

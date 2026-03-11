@@ -19,6 +19,25 @@ Set `watch_streak_min_offline_seconds` in `TwitchChannelPointsMiner(...)`.
 - Default: `1800`
 - Disable the offline wait: `0`
 
+### Where do I set a points limit for watching?
+
+Use `points_limit` inside `StreamerSettings`.
+
+Global default in `run.py`:
+
+```python
+DEFAULT_STREAMER_SETTINGS = StreamerSettings(points_limit=50000)
+```
+
+Per-streamer override:
+
+```python
+Streamer("name", settings=StreamerSettings(points_limit=150000))
+```
+
+When a channel is already at or above its limit, the miner skips it and moves to the next eligible channel.
+Pending watch streaks still bypass the limit so streak rewards are not missed.
+
 ## Startup And Streaks
 
 ### What happens to streamers already online at startup?

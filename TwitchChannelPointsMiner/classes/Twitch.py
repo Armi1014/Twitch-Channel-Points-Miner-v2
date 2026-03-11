@@ -1266,6 +1266,60 @@ class Twitch(object):
             return min(progress_values)
         return float("inf")
 
+    def _points_limit_value(self, streamer) -> Optional[int]:
+        settings = getattr(streamer, "settings", None)
+        limit = getattr(settings, "points_limit", None) if settings is not None else None
+        if limit in [None, ""]:
+            return None
+        try:
+            parsed_limit = int(limit)
+        except (TypeError, ValueError):
+            return None
+        return parsed_limit if parsed_limit >= 0 else None
+
+    def _has_pending_watch_streak(self, streamer, now: float) -> bool:
+        settings = getattr(streamer, "settings", None)
+        if getattr(settings, "watch_streak", False) is not True:
+            return False
+        session = self._ensure_watch_streak_session(streamer, now)
+        return self._session_is_eligible(session, streamer)
+
+    def _streamer_has_reached_points_limit(self, streamer) -> bool:
+        limit = self._points_limit_value(streamer)
+        if limit is None:
+            return False
+
+        current_points = getattr(streamer, "channel_points", None)
+        if current_points in [None, ""]:
+            return False
+        try:
+            current_points = int(current_points)
+        except (TypeError, ValueError):
+            return False
+
+        return current_points >= limit
+
+    def _should_skip_streamer_for_points_limit(self, streamer, now: float) -> bool:
+        if self._streamer_has_reached_points_limit(streamer) is False:
+            return False
+
+        return self._has_pending_watch_streak(streamer, now) is False
+
+    def _select_capped_streak_streamers(self, streamers, streamers_index, now: float):
+        capped_candidates = [
+            idx
+            for idx in streamers_index
+            if self._streamer_has_reached_points_limit(streamers[idx])
+        ]
+        if not capped_candidates:
+            return []
+        return self._select_streak_streamers(
+            streamers,
+            capped_candidates,
+            [Priority.STREAK],
+            now,
+        )
+
     # Apply the configured priorities in order; each one appends to the sort key so later priorities
     # only break ties from earlier ones (e.g., [STREAK, DROPS, ORDER] builds a tuple in that order).
     def _priority_sort_key(self, streamers, idx, priorities, order_map, now):
@@ -1385,13 +1439,29 @@ class Twitch(object):
 
     def _select_streamers_to_watch(self, streamers, streamers_index, priority):
         now = time.time()
-        streamers_index = [
+        eligible_streamers_index = [
             idx
             for idx in streamers_index
             if getattr(streamers[idx], "channel_points_enabled", True)
             and not getattr(streamers[idx], "chat_banned", False)
         ]
-        if not streamers_index:
+        if not eligible_streamers_index:
+            return []
+
+        forced_streak_selection = []
+        if not priority or priority[0] != Priority.STREAK:
+            forced_streak_selection = self._select_capped_streak_streamers(
+                streamers, eligible_streamers_index, now
+            )
+
+        streamers_index = [
+            idx
+            for idx in eligible_streamers_index
+            if idx not in forced_streak_selection
+            and not self._should_skip_streamer_for_points_limit(streamers[idx], now)
+        ]
+
+        if not streamers_index and not forced_streak_selection:
             return []
 
         if priority and priority[0] != Priority.STREAK and (
@@ -1426,7 +1496,8 @@ class Twitch(object):
             ),
         )
 
-        return sorted_candidates[: self.max_watch_amount]
+        available_slots = max(0, self.max_watch_amount - len(forced_streak_selection))
+        return forced_streak_selection + sorted_candidates[:available_slots]
 
     def _offline_gap_seconds(self, streamer) -> Optional[float]:
         if streamer.offline_at and streamer.online_at and streamer.online_at > streamer.offline_at:
