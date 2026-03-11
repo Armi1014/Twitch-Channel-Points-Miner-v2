@@ -399,7 +399,7 @@ class Streamer(object):
             self.irc_chat = ThreadChat(
                 self.irc_chat.username,
                 self.irc_chat.token,
-                self.username,
+                self,
             )
 
     def __join_chat(self):

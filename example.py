@@ -216,9 +216,24 @@ twitch_miner = TwitchChannelPointsMiner(
 # [
 #     Events.STREAMER_ONLINE,
 #     Events.STREAMER_OFFLINE,
+#     Events.SUBSCRIPTION,
 #     Events.BET_LOSE,
 #     Events.CHAT_MENTION,
 # ]
+#
+# Minimal Discord example:
+# LOGGER_SETTINGS = LoggerSettings(
+#     ...,
+#     discord=Discord(
+#         webhook_api="https://discord.com/api/webhooks/...",
+#         events=[Events.SUBSCRIPTION],
+#     ),
+# )
+#
+# `Events.SUBSCRIPTION` comes from Twitch IRC `USERNOTICE` messages, so the
+# streamer's chat setting must not be `ChatPresence.NEVER`.
+# It is self-only: it alerts when your account gets a sub/resub/subgift/upgrade,
+# and ignores other viewers' subscription events.
 
 # Settings priority is:
 # 1. Settings passed directly in mine(...)

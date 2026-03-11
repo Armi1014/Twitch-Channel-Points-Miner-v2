@@ -953,7 +953,7 @@ class TwitchChannelPointsMiner:
                     streamer.irc_chat = ThreadChat(
                         self.username,
                         self.twitch.twitch_login.get_auth_token(),
-                        streamer.username,
+                        streamer,
                     )
                 streamer.watch_streak_cache = self.watch_streak_cache
                 streamer.watch_streak_cache_path = self.watch_streak_cache_path

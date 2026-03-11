@@ -69,6 +69,37 @@ The exact number will vary, but faster startup is a core goal of this fork, not 
 * you want the miner to become usable faster after launch
 * you want fewer annoying transient error logs
 
+## Subscription Notifications
+
+This fork can send `Events.SUBSCRIPTION` notifications to Discord or other webhook-style integrations.
+
+What it does:
+
+* listens for Twitch IRC `USERNOTICE` events
+* formats a cleaner subscription message with the streamer/channel and current points
+* only alerts for subscription events that are about **your own account**
+
+What counts as "about your own account":
+
+* you subscribe
+* you renew a subscription
+* you receive a sub gift
+* you upgrade a gift or Prime subscription
+
+What it ignores:
+
+* other viewers subscribing
+* other viewers renewing
+* other viewers receiving gifted subs
+
+Important:
+
+* this depends on IRC chat being enabled for that streamer
+* `chat=ChatPresence.NEVER` disables this feature for that channel
+* `chat=ChatPresence.ONLINE` is enough
+
+See [example.py](example.py) for a basic Discord webhook configuration example.
+
 ## Docs
 
 * [Latest Releases](https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2/releases)
