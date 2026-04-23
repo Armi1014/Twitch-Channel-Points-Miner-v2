@@ -39,7 +39,6 @@ dependencies = [
   "irc",
   "pandas",
   "pytz",
-  "validators",
   "openpyxl",
 ]
 

@@ -113,8 +113,6 @@ tzdata==2025.3 ; python_full_version < '3.11' or sys_platform == 'emscripten' or
     # via pandas
 urllib3==2.6.3
     # via requests
-validators==0.35.0
-    # via twitch-channel-points-miner-v2
 websocket-client==1.9.0
     # via twitch-channel-points-miner-v2
 werkzeug==3.1.6
