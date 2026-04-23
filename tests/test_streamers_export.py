@@ -343,8 +343,12 @@ class StreamersExportTest(unittest.TestCase):
                 self.assertEqual(sheet[header].alignment.horizontal, "center")
                 self.assertEqual(sheet[header].fill.fill_type, "solid")
                 self.assertTrue((sheet[header].fill.fgColor.rgb or "").endswith("1F4E78"))
+                self.assertEqual(sheet[header].border.bottom.style, "medium")
 
-            self.assertEqual(sheet.freeze_panes, "A2")
+            self.assertEqual(sheet.title, "Streamers")
+            self.assertFalse(sheet.sheet_view.showGridLines)
+            self.assertEqual(sheet.sheet_view.zoomScale, 115)
+            self.assertEqual(sheet.freeze_panes, "B2")
             self.assertEqual(len(sheet.tables), 1)
 
             table = next(iter(sheet.tables.values()))
@@ -353,6 +357,8 @@ class StreamersExportTest(unittest.TestCase):
             self.assertTrue(table.tableStyleInfo.showRowStripes)
             self.assertEqual(table.autoFilter.ref, "A1:H2")
 
+            self.assertEqual(sheet["A2"].hyperlink.target, "https://www.twitch.tv/very_long_streamer_name")
+            self.assertEqual(sheet["A2"].alignment.horizontal, "left")
             self.assertEqual(sheet["B2"].alignment.horizontal, "right")
             self.assertEqual(sheet["C2"].alignment.horizontal, "center")
             self.assertEqual(sheet["D2"].alignment.horizontal, "center")
@@ -366,6 +372,7 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(sheet["C2"].value.strftime("%d.%m.%Y"), "21.07.2025")
             self.assertEqual(sheet["D2"].value.strftime("%d.%m.%Y"), "04.03.2026")
 
+            self.assertTrue((sheet["E2"].fill.fgColor.rgb or "").endswith("F1F8E9"))
             self.assertTrue((sheet["F2"].fill.fgColor.rgb or "").endswith("FDECEA"))
             self.assertTrue((sheet["G2"].fill.fgColor.rgb or "").endswith("E8F5E9"))
             self.assertTrue((sheet["H2"].fill.fgColor.rgb or "").endswith("F1F8E9"))

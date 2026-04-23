@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.formatting.rule import DataBarRule
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
@@ -697,19 +697,25 @@ class TwitchChannelPointsMiner:
         alert_fill = PatternFill("solid", fgColor="FDECEA")
         success_fill = PatternFill("solid", fgColor="E8F5E9")
         soft_success_fill = PatternFill("solid", fgColor="F1F8E9")
+        neutral_fill = PatternFill("solid", fgColor="F7F9FC")
+        header_border = Border(bottom=Side(style="medium", color="163B5C"))
 
         header_row = 1
+        sheet.title = "Streamers"
+        sheet.sheet_view.showGridLines = False
+        sheet.sheet_view.zoomScale = 115
         header_names = {}
         for col_idx in range(1, sheet.max_column + 1):
             header_cell = sheet.cell(row=header_row, column=col_idx)
             header_name = str(header_cell.value or "")
             header_names[header_name] = col_idx
-            header_cell.font = Font(bold=True, color="FFFFFF")
+            header_cell.font = Font(bold=True, color="FFFFFF", size=11)
             header_cell.fill = header_fill
             header_cell.alignment = Alignment(horizontal="center", vertical="center")
-        sheet.row_dimensions[header_row].height = 22
+            header_cell.border = header_border
+        sheet.row_dimensions[header_row].height = 24
 
-        sheet.freeze_panes = "A2"
+        sheet.freeze_panes = "B2"
 
         for header_name in ("Followdate", "Last Stream"):
             col_idx = header_names.get(header_name)
@@ -735,9 +741,21 @@ class TwitchChannelPointsMiner:
         banned_idx = header_names.get("Banned")
         watch_idx = header_names.get("Watchstreaks")
         gained_idx = header_names.get("Points gained")
+        streamer_idx = header_names.get("Streamer")
         max_points_gained = 0
 
         for row_idx in range(2, sheet.max_row + 1):
+            sheet.row_dimensions[row_idx].height = 19
+            if streamer_idx is not None:
+                streamer_cell = sheet.cell(row=row_idx, column=streamer_idx)
+                streamer_name = str(streamer_cell.value or "").strip()
+                streamer_cell.alignment = Alignment(horizontal="left", vertical="center")
+                if streamer_name:
+                    streamer_cell.hyperlink = f"https://www.twitch.tv/{streamer_name}"
+                    streamer_cell.font = Font(
+                        color="1A73E8",
+                        underline="single",
+                    )
             if points_idx is not None:
                 sheet.cell(row=row_idx, column=points_idx).alignment = Alignment(
                     horizontal="right", vertical="center"
@@ -761,9 +779,16 @@ class TwitchChannelPointsMiner:
                     horizontal="center", vertical="center"
                 )
             if sub_idx is not None:
-                sheet.cell(row=row_idx, column=sub_idx).alignment = Alignment(
+                sub_cell = sheet.cell(row=row_idx, column=sub_idx)
+                sub_cell.alignment = Alignment(
                     horizontal="center", vertical="center"
                 )
+                if str(sub_cell.value or "").lower() == "yes":
+                    sub_cell.font = Font(color="2E7D32", bold=True)
+                    sub_cell.fill = soft_success_fill
+                elif str(sub_cell.value or "").lower() == "no":
+                    sub_cell.font = Font(color="6B7280")
+                    sub_cell.fill = neutral_fill
             if banned_idx is not None:
                 banned_cell = sheet.cell(row=row_idx, column=banned_idx)
                 banned_cell.alignment = Alignment(
@@ -772,6 +797,8 @@ class TwitchChannelPointsMiner:
                 if str(banned_cell.value or "").lower() == "yes":
                     banned_cell.font = Font(color="C62828", bold=True)
                     banned_cell.fill = alert_fill
+                elif str(banned_cell.value or "").lower() == "no":
+                    banned_cell.font = Font(color="6B7280")
             if watch_idx is not None:
                 watch_cell = sheet.cell(row=row_idx, column=watch_idx)
                 watch_cell.alignment = Alignment(
@@ -782,6 +809,8 @@ class TwitchChannelPointsMiner:
                     watch_cell.fill = success_fill
                 elif isinstance(watch_cell.value, (int, float)) and watch_cell.value > 0:
                     watch_cell.font = Font(color="2E7D32")
+                elif isinstance(watch_cell.value, (int, float)) and watch_cell.value == 0:
+                    watch_cell.font = Font(color="6B7280")
 
         data_ref = f"A1:{get_column_letter(sheet.max_column)}{sheet.max_row}"
 
