@@ -3,6 +3,7 @@ import re
 import socket
 import time
 from copy import deepcopy
+from itertools import chain
 from datetime import datetime, timezone
 from os import path
 from random import randrange
@@ -53,6 +54,10 @@ def create_nonce(length=30) -> str:
             char = chr(ord("A") + char_index - 26 - 10)
         nonce += char
     return nonce
+
+
+def create_random_id(length=21) -> str:
+    return create_nonce(length)
 
 # for mobile-token
 
@@ -110,6 +115,25 @@ def remove_emoji(string: str) -> str:
     return emoji_pattern.sub(r"", string)
 
 
+def simple_repr(value) -> str:
+    field_names = []
+    if hasattr(value, "__dict__"):
+        field_names.extend(key for key in vars(value) if not key.startswith("_"))
+    for cls in value.__class__.__mro__:
+        slots = getattr(cls, "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if slot.startswith("_") is False and slot not in field_names:
+                field_names.append(slot)
+    fields = ", ".join(
+        f"{key}={repr(getattr(value, key))}"
+        for key in field_names
+        if hasattr(value, key)
+    )
+    return f"{value.__class__.__name__}({fields})"
+
+
 def at_least_one_value_in_settings_is(items, attr, value=True):
     for item in items:
         if getattr(item.settings, attr) == value:
@@ -164,6 +188,10 @@ def create_chunks(lst, n):
     return [lst[i: (i + n)] for i in range(0, len(lst), n)]  # noqa: E203
 
 
+def combine(*iterables):
+    return chain(*iterables)
+
+
 def download_file(name, fpath):
     r = requests.get(
         path.join(GITHUB_url, name),
@@ -190,6 +218,13 @@ def interruptible_sleep(running_flag, duration, step=1.0):
     target = time.time() + duration
     while running_flag() and time.time() < target:
         time.sleep(max(0.0, min(step, target - time.time())))
+
+
+def format_timestamp(value: datetime | None = None) -> str:
+    value = value or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def load_json(path: str, default):

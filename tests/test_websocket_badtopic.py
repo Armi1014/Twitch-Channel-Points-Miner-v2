@@ -2,7 +2,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
+from TwitchChannelPointsMiner.classes.websocket.pubsub import PubSubWebSocketPool
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
 
 
@@ -18,7 +18,7 @@ class WebSocketBadTopicTest(unittest.TestCase):
             twitch=SimpleNamespace(twitch_login=SimpleNamespace(username="tester")),
         )
 
-        WebSocketsPool.on_message(
+        PubSubWebSocketPool.on_message(
             ws,
             json.dumps(
                 {

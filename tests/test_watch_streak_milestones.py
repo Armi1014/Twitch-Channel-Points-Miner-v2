@@ -11,6 +11,14 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, Streame
 
 
 class WatchStreakMilestoneTest(unittest.TestCase):
+    def setUp(self):
+        patcher = patch(
+            "TwitchChannelPointsMiner.classes.TwitchLogin.TwitchLogin.get_user_id",
+            return_value="261663741",
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _make_streamer(self, username: str) -> Streamer:
         settings = StreamerSettings(
             watch_streak=True,

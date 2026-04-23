@@ -175,6 +175,7 @@ DEFAULT_STREAMER_SETTINGS = StreamerSettings(
 # ---------------------------------------------------------------------------
 # 6. Miner startup
 # ---------------------------------------------------------------------------
+USE_HERMES = True  # False = force the legacy PubSub websocket transport
 CLAIM_DROPS_ON_STARTUP = False
 ENABLE_ANALYTICS = False
 DISABLE_SSL_CERT_VERIFICATION = False
@@ -188,6 +189,7 @@ twitch_miner = TwitchChannelPointsMiner(
     enable_analytics=ENABLE_ANALYTICS,
     disable_ssl_cert_verification=DISABLE_SSL_CERT_VERIFICATION,
     disable_at_in_nickname=MATCH_MENTIONS_WITHOUT_AT,
+    use_hermes=USE_HERMES,
     watch_streak_max_parallel=WATCH_STREAK_MAX_PARALLEL,
     watch_streak_min_offline_seconds=WATCH_STREAK_OFFLINE_WAIT_SECONDS,
     logger_settings=LOGGER_SETTINGS,

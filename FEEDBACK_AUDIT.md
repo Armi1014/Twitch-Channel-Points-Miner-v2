@@ -28,7 +28,7 @@ Scope reviewed:
   - Resolved all review threads on #753.
 - Key files:
   - `TwitchChannelPointsMiner/classes/Twitch.py`
-  - `TwitchChannelPointsMiner/classes/WebSocketsPool.py`
+  - `TwitchChannelPointsMiner/classes/websocket/pubsub/Pool.py`
   - `.gitattributes`
 
 2) PR #759: typed GQL feedback points

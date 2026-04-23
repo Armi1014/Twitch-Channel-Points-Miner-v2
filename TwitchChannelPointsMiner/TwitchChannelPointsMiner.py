@@ -22,6 +22,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
+from TwitchChannelPointsMiner.classes.PubSub import PubSubHandler
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
@@ -30,8 +31,17 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
 from TwitchChannelPointsMiner.classes.Exceptions import StreamerDoesNotExistException
 from TwitchChannelPointsMiner.classes.Settings import FollowersOrder, Priority, Settings
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
-from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
-from TwitchChannelPointsMiner.constants import FORK_OWNER, GITHUB_REPO_URL
+from TwitchChannelPointsMiner.classes.websocket import (
+    HermesWebSocketPool,
+    PubSubWebSocketPool,
+)
+from TwitchChannelPointsMiner.classes.websocket.hermes.data import JsonDecoder, JsonEncoder
+from TwitchChannelPointsMiner.constants import (
+    CLIENT_ID_WEB,
+    FORK_OWNER,
+    GITHUB_REPO_URL,
+    HERMES_WEBSOCKET,
+)
 from TwitchChannelPointsMiner.logger import LoggerSettings, configure_loggers
 from TwitchChannelPointsMiner.WatchStreakCache import (
     MIN_OFFLINE_FOR_NEW_STREAK,
@@ -75,6 +85,7 @@ class TwitchChannelPointsMiner:
         "enable_analytics",
         "disable_ssl_cert_verification",
         "disable_at_in_nickname",
+        "use_hermes",
         "priority",
         "streamers",
         "events_predictions",
@@ -121,6 +132,7 @@ class TwitchChannelPointsMiner:
         streamer_settings: StreamerSettings = StreamerSettings(),
         watch_streak_max_parallel: int | None = None,
         watch_streak_min_offline_seconds: int = MIN_OFFLINE_FOR_NEW_STREAK,
+        use_hermes: bool = True,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -132,6 +144,7 @@ class TwitchChannelPointsMiner:
         Settings.disable_ssl_cert_verification = disable_ssl_cert_verification
 
         Settings.disable_at_in_nickname = disable_at_in_nickname
+        Settings.use_hermes = use_hermes
 
         # Wait for Twitch.tv connectivity with a timeout to avoid hanging forever
         error_printed = False
@@ -183,6 +196,7 @@ class TwitchChannelPointsMiner:
         )
 
         self.claim_drops_startup = claim_drops_startup
+        self.use_hermes = use_hermes
         safe_account_name = "".join(
             ch if (ch.isalnum() or ch in "._-") else "_"
             for ch in self.username.lower()
@@ -849,6 +863,26 @@ class TwitchChannelPointsMiner:
                 break
             self._export_streamers_snapshot()
 
+    def _create_ws_pool(self):
+        listeners = [
+            PubSubHandler(
+                twitch=self.twitch,
+                streamers=self.streamers,
+                events_predictions=self.events_predictions,
+            )
+        ]
+        if self.use_hermes:
+            return HermesWebSocketPool(
+                url=f"{HERMES_WEBSOCKET}?clientId={CLIENT_ID_WEB}",
+                twitch=self.twitch,
+                listeners=listeners,
+                request_encoder=JsonEncoder(),
+                response_decoder=JsonDecoder(),
+            )
+        return PubSubWebSocketPool(
+            twitch=self.twitch,
+            listeners=listeners,
+        )
 
     def mine(
         self,
@@ -1070,11 +1104,8 @@ class TwitchChannelPointsMiner:
             self.minute_watcher_thread.name = "Minute watcher"
             self.minute_watcher_thread.start()
 
-            self.ws_pool = WebSocketsPool(
-                twitch=self.twitch,
-                streamers=self.streamers,
-                events_predictions=self.events_predictions,
-            )
+            self.ws_pool = self._create_ws_pool()
+            self.ws_pool.start()
 
             # Subscribe to community-points-user. Get update for points spent or gains
             user_id = self.twitch.twitch_login.get_user_id()
@@ -1128,18 +1159,7 @@ class TwitchChannelPointsMiner:
 
             while self.running:
                 interruptible_sleep(lambda: self.running, random.uniform(20, 60))
-                # Do an external control for WebSocket. Check if the thread is running
-                # Check if is not None because maybe we have already created a new connection on array+1 and now index is None
-                for index in range(0, len(self.ws_pool.ws)):
-                    if (
-                        self.ws_pool.ws[index].is_reconnecting is False
-                        and self.ws_pool.ws[index].elapsed_last_ping() > 10
-                        and internet_connection_available() is True
-                    ):
-                        logger.info(
-                            f"#{index} - The last PING was sent more than 10 minutes ago. Reconnecting to the WebSocket..."
-                        )
-                        WebSocketsPool.handle_reconnection(self.ws_pool.ws[index])
+                self.ws_pool.check_stale_connections()
 
                 if ((time.time() - refresh_context) // 60) >= 30:
                     refresh_context = time.time()

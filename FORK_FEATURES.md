@@ -48,8 +48,9 @@ Relevant code:
 - LISTEN nonce tracking so PubSub RESPONSE errors can be mapped back to the specific failed topic.
 
 Relevant code:
-- `TwitchChannelPointsMiner/classes/WebSocketsPool.py`
-- `TwitchChannelPointsMiner/classes/TwitchWebSocket.py`
+- `TwitchChannelPointsMiner/classes/websocket/pubsub/Pool.py`
+- `TwitchChannelPointsMiner/classes/websocket/pubsub/Client.py`
+- `TwitchChannelPointsMiner/classes/PubSub.py`
 
 ## 4) GQL hardening and observability
 

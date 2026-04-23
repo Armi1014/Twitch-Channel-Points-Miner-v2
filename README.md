@@ -25,6 +25,8 @@ uv sync
 uv run run.py
 ```
 
+Hermes is the default websocket backend in this fork. If you need the legacy PubSub path, set `USE_HERMES = False` in your runner file.
+
 **Pip Alternative**
 
 ```sh
@@ -45,6 +47,7 @@ Compared to upstream, this fork focuses on **reliability first**:
 * clearer `Priority.FAVORITE` behavior
 * faster startup and less waiting during the initial refresh cycle
 * reduced recurring timeout / backend error log spam
+* Hermes websocket support with explicit PubSub fallback
 
 **Example startup improvement**
 
