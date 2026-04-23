@@ -100,8 +100,8 @@ When you open a pull request, you must fill out the "Ready for review" template 
 All Python code is formatted with [Black](https://github.com/psf/black) using the default settings. Your code will not be accepted if it is not blackened.
 You can use the pre-commit hook.
 ```
-pip install pre-commit
-pre-commit install
+uv sync --group dev
+uv run pre-commit install
 ```
 
 ### Suggested changes

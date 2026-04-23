@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Twitch-Channel-Points-Miner-v2"
+version = "2.0.6"
+description = "A simple script that will watch a stream for you and earn the channel points."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPLv3+" }
+authors = [
+  { name = "Tkd-Alex (Alessandro Maggio)", email = "alex.tkd.alex@gmail.com" },
+  { name = "rdavydov (Roman Davydov)" },
+]
+keywords = ["python", "bot", "streaming", "script", "miner", "twitch", "channel-points"]
+classifiers = [
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
+  "Topic :: Utilities",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Software Development :: Version Control :: Git",
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Natural Language :: English",
+]
+dependencies = [
+  "requests",
+  "websocket-client",
+  "pillow",
+  "python-dateutil",
+  "emoji",
+  "millify",
+  "colorama",
+  "flask",
+  "irc",
+  "pandas",
+  "pytz",
+  "validators",
+  "openpyxl",
+]
+
+[project.urls]
+Homepage = "https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2"
+Repository = "https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["TwitchChannelPointsMiner*"]
+
+[dependency-groups]
+dev = [
+  "pre-commit",
+]

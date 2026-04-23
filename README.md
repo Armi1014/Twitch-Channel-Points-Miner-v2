@@ -20,21 +20,15 @@ If you are coming from upstream, one of the first things you should notice is th
 ```sh
 git clone https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2
 cd Twitch-Channel-Points-Miner-v2
-python -m venv .venv
-````
-
-**Windows**
-
-```sh
-.venv\Scripts\activate
-copy example.py run.py
-pip install -r requirements.txt
-python run.py
+cp example.py run.py
+uv sync
+uv run run.py
 ```
 
-**Linux / macOS**
+**Pip Alternative**
 
 ```sh
+python -m venv .venv
 source .venv/bin/activate
 cp example.py run.py
 pip install -r requirements.txt
