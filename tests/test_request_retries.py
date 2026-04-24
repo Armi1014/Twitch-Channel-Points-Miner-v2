@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import requests
 
+from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 
 
@@ -212,6 +213,79 @@ class RequestRetryTest(unittest.TestCase):
         self.assertTrue(handled)
         mocked_warning.assert_called_once()
         self.assertIn("service timeout (x3)", mocked_warning.call_args[0][2])
+
+    def test_fetch_playback_access_token_uses_current_web_player_variables(self):
+        streamer = Streamer("TestChannel")
+
+        with patch.object(
+            Twitch,
+            "post_gql_request",
+            return_value={
+                "data": {
+                    "streamPlaybackAccessToken": {
+                        "signature": "test-signature",
+                        "value": "test-token",
+                    }
+                }
+            },
+        ) as mocked_post:
+            token = self.twitch._fetch_playback_access_token(streamer)
+
+        self.assertEqual(token, ("test-signature", "test-token"))
+        json_data = mocked_post.call_args.args[0]
+        self.assertEqual(json_data["operationName"], "PlaybackAccessToken")
+        self.assertEqual(
+            json_data["variables"],
+            {
+                "login": "testchannel",
+                "isLive": True,
+                "isVod": False,
+                "vodID": "",
+                "playerBackend": "mediaplayer",
+                "playerType": "site",
+                "platform": "web",
+            },
+        )
+
+    def test_prime_stream_playback_walks_m3u_playlists_and_heads_segment(self):
+        streamer = Streamer("TestChannel")
+
+        with patch.object(
+            Twitch,
+            "_fetch_playback_access_token",
+            return_value=("test-signature", "test-token"),
+        ), patch.object(
+            Twitch,
+            "_request_with_retry",
+            side_effect=[
+                FakeResponse(
+                    status_code=200,
+                    text="#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=160000\nhttps://video.example/low.m3u8\n",
+                ),
+                FakeResponse(
+                    status_code=200,
+                    text="#EXTM3U\n#EXTINF:2.000,\nhttps://video.example/segment.ts\n",
+                ),
+                FakeResponse(status_code=200),
+            ],
+        ) as mocked_request:
+            self.assertTrue(self.twitch._prime_stream_playback(streamer))
+
+        self.assertEqual(
+            mocked_request.call_args_list[0].args[:2],
+            (
+                "GET",
+                "https://usher.ttvnw.net/api/channel/hls/testchannel.m3u8?sig=test-signature&token=test-token",
+            ),
+        )
+        self.assertEqual(
+            mocked_request.call_args_list[1].args[:2],
+            ("GET", "https://video.example/low.m3u8"),
+        )
+        self.assertEqual(
+            mocked_request.call_args_list[2].args[:2],
+            ("HEAD", "https://video.example/segment.ts"),
+        )
 
 
 if __name__ == "__main__":

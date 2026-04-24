@@ -19,6 +19,7 @@ import requests
 from pathlib import Path
 from secrets import choice, token_hex
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
 # from urllib.parse import quote
 # from base64 import urlsafe_b64decode
 # from datetime import datetime
@@ -768,6 +769,144 @@ class Twitch(object):
                         step=max(0.1, min(0.5, delay)),
                     )
                 attempt += 1
+
+    @staticmethod
+    def _is_http_url(value: str) -> bool:
+        if not isinstance(value, str):
+            return False
+        parsed = urlparse(value.strip())
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+    def _last_http_url_from_playlist(self, playlist_text: str) -> str | None:
+        for line in reversed((playlist_text or "").splitlines()):
+            candidate = line.strip()
+            if self._is_http_url(candidate):
+                return candidate
+        return None
+
+    def _fetch_playback_access_token(self, streamer) -> tuple[str, str] | None:
+        json_data = copy.deepcopy(GQLOperations.PlaybackAccessToken)
+        json_data["variables"] = {
+            "login": streamer.username,
+            "isLive": True,
+            "isVod": False,
+            "vodID": "",
+            "playerBackend": "mediaplayer",
+            "playerType": "site",
+            "platform": "web",
+        }
+
+        try:
+            response = self.post_gql_request(json_data)
+            logger.debug("Sent PlaybackAccessToken request for %s", streamer)
+        except Exception as exc:
+            self._log_watch_issue(
+                streamer.username,
+                "playback_access_token_exception",
+                "Error fetching PlaybackAccessToken for %s: %s",
+                streamer,
+                str(exc),
+            )
+            return None
+
+        if not isinstance(response, dict) or "data" not in response:
+            self._log_watch_issue(
+                streamer.username,
+                "invalid_playback_access_token",
+                "Invalid PlaybackAccessToken response for %s: %s",
+                streamer.username,
+                response,
+            )
+            return None
+
+        token_data = response["data"].get("streamPlaybackAccessToken") or {}
+        signature = token_data.get("signature")
+        value = token_data.get("value")
+        if not signature or not value:
+            self._log_watch_issue(
+                streamer.username,
+                "missing_playback_signature_or_value",
+                "Missing signature/value in PlaybackAccessToken response for %s",
+                streamer.username,
+            )
+            return None
+        return signature, value
+
+    def _prime_stream_playback(self, streamer) -> bool:
+        playback_token = self._fetch_playback_access_token(streamer)
+        if playback_token is None:
+            return False
+        signature, value = playback_token
+
+        qualities_url = (
+            f"https://usher.ttvnw.net/api/channel/hls/{streamer.username}.m3u8"
+            f"?sig={signature}&token={value}"
+        )
+        qualities_response = self._request_with_retry(
+            "GET",
+            qualities_url,
+            request_name=f"broadcast_qualities:{streamer.username}",
+            headers={"User-Agent": self.user_agent},
+            timeout=20,
+        )
+        logger.debug(
+            "Send RequestBroadcastQualitiesURL request for %s - Status code: %s",
+            streamer,
+            qualities_response.status_code,
+        )
+        if qualities_response.status_code != 200:
+            return False
+
+        quality_url = self._last_http_url_from_playlist(qualities_response.text)
+        if quality_url is None:
+            self._log_watch_issue(
+                streamer.username,
+                "missing_broadcast_quality_url",
+                "Unable to find a playable quality URL for %s",
+                streamer.username,
+                level=logging.DEBUG,
+            )
+            return False
+
+        stream_list_response = self._request_with_retry(
+            "GET",
+            quality_url,
+            request_name=f"stream_url_list:{streamer.username}",
+            headers={"User-Agent": self.user_agent},
+            timeout=20,
+        )
+        logger.debug(
+            "Send BroadcastLowestQualityURL request for %s - Status code: %s",
+            streamer,
+            stream_list_response.status_code,
+        )
+        if stream_list_response.status_code != 200:
+            return False
+
+        stream_url = self._last_http_url_from_playlist(stream_list_response.text)
+        if stream_url is None:
+            self._log_watch_issue(
+                streamer.username,
+                "missing_stream_segment_url",
+                "Unable to find a stream segment URL for %s",
+                streamer.username,
+                level=logging.DEBUG,
+            )
+            return False
+
+        stream_response = self._request_with_retry(
+            "HEAD",
+            stream_url,
+            request_name=f"stream_lowest_quality_head:{streamer.username}",
+            headers={"User-Agent": self.user_agent},
+            timeout=20,
+        )
+        logger.debug(
+            "Send StreamLowestQualityURL request for %s - Status code: %s",
+            streamer,
+            stream_response.status_code,
+        )
+        return stream_response.status_code == 200
 
     def _effective_streak_min_offline_seconds(self) -> int:
         if self.watch_streak_cache is None:
@@ -1839,6 +1978,9 @@ class Twitch(object):
                     next_iteration = time.time() + 20 / len(streamers_watching)
 
                     try:
+                        if self._prime_stream_playback(streamers[index]) is False:
+                            continue
+
                         response = self._request_with_retry(
                             "POST",
                             streamers[index].stream.spade_url,
