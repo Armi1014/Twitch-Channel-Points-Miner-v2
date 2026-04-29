@@ -2219,13 +2219,45 @@ class Twitch(object):
                         }
                     }
                     response = self.post_gql_request(json_data)
-                    if (
-                        "data" in response
-                        and "makePrediction" in response["data"]
-                        and "error" in response["data"]["makePrediction"]
-                        and response["data"]["makePrediction"]["error"] is not None
-                    ):
-                        error_code = response["data"]["makePrediction"]["error"]["code"]
+                    if self._log_gql_errors(json_data.get("operationName"), response):
+                        return
+                    make_prediction = None
+                    if isinstance(response, dict):
+                        data = response.get("data")
+                        if isinstance(data, dict):
+                            make_prediction = data.get("makePrediction")
+
+                    if make_prediction is None:
+                        if isinstance(response, dict) and isinstance(
+                            response.get("data"), dict
+                        ):
+                            logger.error(
+                                "Failed to place bet, MakePrediction returned no result",
+                                extra={
+                                    "emoji": ":four_leaf_clover:",
+                                    "event": Events.BET_FAILED,
+                                },
+                            )
+                        return
+
+                    if not isinstance(make_prediction, dict):
+                        logger.error(
+                            "Failed to place bet, unexpected MakePrediction response: %s",
+                            make_prediction,
+                            extra={
+                                "emoji": ":four_leaf_clover:",
+                                "event": Events.BET_FAILED,
+                            },
+                        )
+                        return
+
+                    prediction_error = make_prediction.get("error")
+                    if prediction_error is not None:
+                        error_code = (
+                            prediction_error.get("code")
+                            if isinstance(prediction_error, dict)
+                            else prediction_error
+                        )
                         logger.error(
                             f"Failed to place bet, error: {error_code}",
                             extra={
