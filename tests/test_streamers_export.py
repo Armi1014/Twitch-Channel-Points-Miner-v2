@@ -343,12 +343,14 @@ class StreamersExportTest(unittest.TestCase):
                 self.assertEqual(sheet[header].alignment.horizontal, "center")
                 self.assertEqual(sheet[header].fill.fill_type, "solid")
                 self.assertTrue((sheet[header].fill.fgColor.rgb or "").endswith("1F4E78"))
-                self.assertEqual(sheet[header].border.bottom.style, "medium")
+                self.assertIsNone(sheet[header].border.bottom.style)
 
-            self.assertEqual(sheet.title, "Streamers")
-            self.assertFalse(sheet.sheet_view.showGridLines)
-            self.assertEqual(sheet.sheet_view.zoomScale, 115)
-            self.assertEqual(sheet.freeze_panes, "B2")
+            self.assertEqual(sheet.title, "Sheet1")
+            self.assertIsNone(sheet.sheet_view.showGridLines)
+            self.assertIsNone(sheet.sheet_view.zoomScale)
+            self.assertEqual(sheet.freeze_panes, "A2")
+            self.assertEqual(sheet.row_dimensions[1].height, 22)
+            self.assertIsNone(sheet.row_dimensions[2].height)
             self.assertEqual(len(sheet.tables), 1)
 
             table = next(iter(sheet.tables.values()))
@@ -357,8 +359,8 @@ class StreamersExportTest(unittest.TestCase):
             self.assertTrue(table.tableStyleInfo.showRowStripes)
             self.assertEqual(table.autoFilter.ref, "A1:H2")
 
-            self.assertEqual(sheet["A2"].hyperlink.target, "https://www.twitch.tv/very_long_streamer_name")
-            self.assertEqual(sheet["A2"].alignment.horizontal, "left")
+            self.assertIsNone(sheet["A2"].hyperlink)
+            self.assertIsNone(sheet["A2"].alignment.horizontal)
             self.assertEqual(sheet["B2"].alignment.horizontal, "right")
             self.assertEqual(sheet["C2"].alignment.horizontal, "center")
             self.assertEqual(sheet["D2"].alignment.horizontal, "center")
@@ -372,29 +374,22 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(sheet["C2"].value.strftime("%d.%m.%Y"), "21.07.2025")
             self.assertEqual(sheet["D2"].value.strftime("%d.%m.%Y"), "04.03.2026")
 
-            self.assertTrue((sheet["E2"].fill.fgColor.rgb or "").endswith("F1F8E9"))
-            self.assertTrue((sheet["F2"].fill.fgColor.rgb or "").endswith("FDECEA"))
+            self.assertIsNone(sheet["E2"].fill.fill_type)
+            self.assertIsNone(sheet["F2"].fill.fill_type)
             self.assertTrue((sheet["G2"].fill.fgColor.rgb or "").endswith("E8F5E9"))
             self.assertTrue((sheet["H2"].fill.fgColor.rgb or "").endswith("F1F8E9"))
             self.assertTrue(
                 any(str(entry.sqref).startswith("H2") for entry in sheet.conditional_formatting)
             )
 
-            self.assertGreater(sheet.column_dimensions["A"].width, len("Streamer"))
-            self.assertGreater(sheet.column_dimensions["D"].width, len("Last Stream"))
-            self.assertGreater(
-                sheet.column_dimensions["F"].width,
-                len("Banned"),
-            )
-            self.assertGreater(
-                sheet.column_dimensions["G"].width,
-                len("Watchstreaks"),
-            )
-            self.assertGreater(
-                sheet.column_dimensions["H"].width,
-                len("Points gained"),
-            )
-            self.assertLess(sheet.column_dimensions["F"].width, sheet.column_dimensions["A"].width)
+            self.assertEqual(sheet.column_dimensions["A"].width, 20)
+            self.assertEqual(sheet.column_dimensions["B"].width, 10)
+            self.assertEqual(sheet.column_dimensions["C"].width, 13)
+            self.assertEqual(sheet.column_dimensions["D"].width, 13)
+            self.assertEqual(sheet.column_dimensions["E"].width, 8)
+            self.assertEqual(sheet.column_dimensions["F"].width, 10)
+            self.assertEqual(sheet.column_dimensions["G"].width, 14)
+            self.assertEqual(sheet.column_dimensions["H"].width, 15)
 
     def test_write_streamers_xlsx_rolls_to_new_date_file(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
