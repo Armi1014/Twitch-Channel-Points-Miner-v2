@@ -3,6 +3,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from enum import Enum
 from threading import Lock
 
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
@@ -15,6 +16,28 @@ from TwitchChannelPointsMiner.utils import _millify
 logger = logging.getLogger(__name__)
 
 
+class PlaybackSimulationMode(Enum):
+    ALWAYS = "always"
+    EXCEPT_DROPS = "except_drops"
+    OFF = "off"
+
+    @classmethod
+    def from_value(cls, value):
+        if isinstance(value, cls):
+            return value
+        if value is None:
+            return cls.EXCEPT_DROPS
+        if isinstance(value, str):
+            normalized = value.strip().replace("-", "_").upper()
+            for mode in cls:
+                if normalized in {mode.name, mode.value.upper()}:
+                    return mode
+        raise ValueError(f"Unknown playback simulation mode: {value!r}")
+
+    def __str__(self):
+        return self.value
+
+
 class StreamerSettings(object):
     __slots__ = [
         "make_predictions",
@@ -25,6 +48,7 @@ class StreamerSettings(object):
         "favorite",
         "points_limit",
         "community_goals",
+        "playback_simulation",
         "bet",
         "chat",
     ]
@@ -39,6 +63,7 @@ class StreamerSettings(object):
         favorite: bool = None,
         points_limit: int | None = None,
         community_goals: bool = None,
+        playback_simulation: PlaybackSimulationMode | str = None,
         bet: BetSettings = None,
         chat: ChatPresence = None,
     ):
@@ -50,6 +75,11 @@ class StreamerSettings(object):
         self.favorite = favorite
         self.points_limit = points_limit
         self.community_goals = community_goals
+        self.playback_simulation = (
+            PlaybackSimulationMode.from_value(playback_simulation)
+            if playback_simulation is not None
+            else None
+        )
         self.bet = bet
         self.chat = chat
 
@@ -67,13 +97,16 @@ class StreamerSettings(object):
             self.favorite = False
         if self.community_goals is None:
             self.community_goals = False
+        self.playback_simulation = PlaybackSimulationMode.from_value(
+            self.playback_simulation
+        )
         if self.bet is None:
             self.bet = BetSettings()
         if self.chat is None:
             self.chat = ChatPresence.ONLINE
 
     def __repr__(self):
-        return f"BetSettings(make_predictions={self.make_predictions}, follow_raid={self.follow_raid}, claim_drops={self.claim_drops}, claim_moments={self.claim_moments}, watch_streak={self.watch_streak}, favorite={self.favorite}, points_limit={self.points_limit}, community_goals={self.community_goals}, bet={self.bet}, chat={self.chat})"
+        return f"BetSettings(make_predictions={self.make_predictions}, follow_raid={self.follow_raid}, claim_drops={self.claim_drops}, claim_moments={self.claim_moments}, watch_streak={self.watch_streak}, favorite={self.favorite}, points_limit={self.points_limit}, community_goals={self.community_goals}, playback_simulation={self.playback_simulation}, bet={self.bet}, chat={self.chat})"
 
 
 class Streamer(object):

@@ -617,15 +617,15 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             return responses.get(json_data.get("operationName"), {})
 
         with patch.object(Twitch, "post_gql_request", side_effect=fake_post), patch(
-            "TwitchChannelPointsMiner.classes.Twitch.logger.info"
-        ) as mocked_info:
+            "TwitchChannelPointsMiner.classes.Twitch.logger.debug"
+        ) as mocked_debug:
             updated = twitch.update_stream(streamer)
 
         self.assertTrue(updated)
         self.assertTrue(session.claimed)
         self.assertFalse(streamer.stream.watch_streak_missing)
-        mocked_info.assert_called_once()
-        self.assertIn("Detected WATCH_STREAK for %s", mocked_info.call_args[0][0])
+        mocked_debug.assert_called_once()
+        self.assertIn("Detected WATCH_STREAK for %s", mocked_debug.call_args[0][0])
 
     def test_update_stream_startup_probe_logs_detected_when_already_marked(self):
         twitch = Twitch("milestone-startup-probe", "ua")
@@ -657,12 +657,12 @@ class WatchStreakMilestoneTest(unittest.TestCase):
                 "broadcast-startup-probe-1",
                 watch_streak_missing=False,
             ),
-        ), patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+        ), patch("TwitchChannelPointsMiner.classes.Twitch.logger.debug") as mocked_debug:
             updated = twitch.update_stream(streamer)
 
         self.assertTrue(updated)
-        mocked_info.assert_called_once()
-        self.assertIn("Detected WATCH_STREAK for %s", mocked_info.call_args[0][0])
+        mocked_debug.assert_called_once()
+        self.assertIn("Detected WATCH_STREAK for %s", mocked_debug.call_args[0][0])
 
     def test_update_stream_startup_probe_skips_detected_log_when_reward_seen(self):
         twitch = Twitch("milestone-startup-no-duplicate", "ua")
@@ -886,12 +886,12 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             account_name="streak-log-claimed",
         )
 
-        with patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as mocked_info:
+        with patch("TwitchChannelPointsMiner.classes.Twitch.logger.debug") as mocked_debug:
             twitch._log_streak_claimed(session)
             twitch._log_streak_claimed(session)
 
-        mocked_info.assert_called_once()
-        self.assertIn("Detected WATCH_STREAK for %s", mocked_info.call_args[0][0])
+        mocked_debug.assert_called_once()
+        self.assertIn("Detected WATCH_STREAK for %s", mocked_debug.call_args[0][0])
 
     def test_streak_failed_logs_once_per_session(self):
         twitch = Twitch("streak-log-failed", "ua")

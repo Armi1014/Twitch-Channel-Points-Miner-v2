@@ -29,6 +29,7 @@ from datetime import timezone
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.entities.CommunityGoal import CommunityGoal
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
+from TwitchChannelPointsMiner.classes.entities.Streamer import PlaybackSimulationMode
 from TwitchChannelPointsMiner.classes.Exceptions import (
     StreamerDoesNotExistException,
     StreamerIsOfflineException,
@@ -252,7 +253,7 @@ class Twitch(object):
                 if should_log_detected and session is not None:
                     self._log_streak_claimed(session, streamer)
             elif should_log_detected:
-                logger.info(
+                logger.debug(
                     "Detected WATCH_STREAK for %s",
                     streamer,
                     extra={"emoji": ":rocket:", "event": Events.GAIN_FOR_WATCH_STREAK},
@@ -282,13 +283,11 @@ class Twitch(object):
             "channel": streamer.username,
         }
 
-        if (
-            streamer.stream.game_name() is not None
-            and streamer.stream.game_id() is not None
-            and streamer.settings.claim_drops is True
-        ):
+        if streamer.stream.game_name() is not None and streamer.stream.game_id() is not None:
             event_properties["game"] = streamer.stream.game_name()
             event_properties["game_id"] = streamer.stream.game_id()
+
+        if streamer.settings.claim_drops is True:
             # Update also the campaigns_ids so we are sure to tracking the correct campaign
             streamer.stream.campaigns_ids = (
                 self.__get_campaign_ids_from_streamer(streamer)
@@ -907,6 +906,43 @@ class Twitch(object):
             stream_response.status_code,
         )
         return stream_response.status_code == 200
+
+    def _streamer_has_active_drops(self, streamer) -> bool:
+        settings = getattr(streamer, "settings", None)
+        if getattr(settings, "claim_drops", False) is not True:
+            return False
+
+        stream = getattr(streamer, "stream", None)
+        if stream is None:
+            return False
+        if getattr(stream, "campaigns_ids", None):
+            return True
+        has_farmable_drops = getattr(streamer, "has_farmable_drops", None)
+        if callable(has_farmable_drops):
+            return bool(has_farmable_drops())
+        return bool(getattr(stream, "campaigns", None))
+
+    def _should_prime_stream_playback(self, streamer) -> bool:
+        settings = getattr(streamer, "settings", None)
+        try:
+            mode = PlaybackSimulationMode.from_value(
+                getattr(settings, "playback_simulation", None)
+            )
+        except ValueError as exc:
+            logger.warning("%s; using %s", exc, PlaybackSimulationMode.EXCEPT_DROPS)
+            mode = PlaybackSimulationMode.EXCEPT_DROPS
+
+        if mode is PlaybackSimulationMode.OFF:
+            return False
+        if mode is PlaybackSimulationMode.ALWAYS:
+            return True
+        if self._streamer_has_active_drops(streamer):
+            logger.debug(
+                "Skip m3u8 playback priming for %s because active Drops are available",
+                streamer,
+            )
+            return False
+        return True
 
     def _effective_streak_min_offline_seconds(self) -> int:
         if self.watch_streak_cache is None:
@@ -1758,7 +1794,7 @@ class Twitch(object):
                 account_name=self.account_username,
             )
 
-        logger.info(
+        logger.debug(
             "Detected WATCH_STREAK for %s",
             display_target,
             extra={"emoji": ":rocket:", "event": Events.GAIN_FOR_WATCH_STREAK},
@@ -1978,7 +2014,10 @@ class Twitch(object):
                     next_iteration = time.time() + 20 / len(streamers_watching)
 
                     try:
-                        if self._prime_stream_playback(streamers[index]) is False:
+                        if (
+                            self._should_prime_stream_playback(streamers[index])
+                            and self._prime_stream_playback(streamers[index]) is False
+                        ):
                             continue
 
                         response = self._request_with_retry(
@@ -2425,6 +2464,10 @@ class Twitch(object):
         return campaigns
 
     def claim_drop(self, drop):
+        if not getattr(drop, "drop_instance_id", None):
+            logger.warning("Cannot claim %s because Twitch did not provide a dropInstanceID", drop)
+            return False
+
         logger.info(
             f"Claim {drop}", extra={"emoji": ":package:", "event": Events.DROP_CLAIM}
         )
@@ -2438,21 +2481,29 @@ class Twitch(object):
         data = response.get("data", {}) if isinstance(response, dict) else {}
         claim_result = data.get("claimDropRewards") if isinstance(data, dict) else None
         if claim_result is None:
+            logger.warning("Drop claim response did not include claimDropRewards for %s", drop)
             return False
         status = claim_result.get("status") if isinstance(claim_result, dict) else None
+        if status is None:
+            logger.warning("Drop claim response did not include a status for %s", drop)
         return status in ["ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"]
 
     def claim_all_drops_from_inventory(self):
         inventory = self.__get_inventory()
-        if inventory not in [None, {}]:
-            if inventory["dropCampaignsInProgress"] not in [None, {}]:
-                for campaign in inventory["dropCampaignsInProgress"]:
-                    for drop_dict in campaign["timeBasedDrops"]:
-                        drop = Drop(drop_dict)
-                        drop.update(drop_dict["self"])
-                        if drop.is_claimable is True:
-                            drop.is_claimed = self.claim_drop(drop)
-                            time.sleep(random.uniform(5, 10))
+        campaigns = (
+            inventory.get("dropCampaignsInProgress")
+            if isinstance(inventory, dict)
+            else None
+        )
+        if not campaigns:
+            return
+        for campaign in campaigns:
+            for drop_dict in campaign.get("timeBasedDrops") or []:
+                drop = Drop(drop_dict)
+                drop.update(drop_dict.get("self") or {})
+                if drop.is_claimable is True:
+                    drop.is_claimed = self.claim_drop(drop)
+                    time.sleep(random.uniform(5, 10))
 
     def __streamers_require_campaign_sync(self, streamers):
         # Run drop sync whenever at least one online streamer has drops enabled,
