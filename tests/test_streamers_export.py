@@ -8,7 +8,10 @@ from unittest.mock import Mock, patch
 
 from openpyxl import load_workbook
 
-from TwitchChannelPointsMiner.TwitchChannelPointsMiner import TwitchChannelPointsMiner
+from TwitchChannelPointsMiner.TwitchChannelPointsMiner import (
+    REPORT_PERIODS,
+    TwitchChannelPointsMiner,
+)
 from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer
 from TwitchChannelPointsMiner.utils import _millify
@@ -19,21 +22,29 @@ class StreamersExportTest(unittest.TestCase):
         miner = TwitchChannelPointsMiner.__new__(TwitchChannelPointsMiner)
         miner.streamers = []
         miner.original_streamers = []
+        miner.username = "tester"
+        miner.daily_reports = True
+        miner.weekly_reports = False
+        miner.monthly_reports = False
+        miner.yearly_reports = False
         miner.daily_points_baseline_path = os.path.join(
             os.path.dirname(export_path) or ".",
             "daily_points_baseline.tester.json",
         )
-        miner.daily_points_day_key = datetime.now().strftime("%Y-%m-%d")
-        miner.daily_points_baseline = {}
-        miner.daily_points_snapshot = {}
-        miner.daily_points_session_anchor = {}
+        miner.period_points_baseline = {period: {} for period in REPORT_PERIODS}
+        miner.period_points_snapshot = {period: {} for period in REPORT_PERIODS}
+        miner.period_points_session_anchor = {period: {} for period in REPORT_PERIODS}
+        miner.period_points_keys = {
+            period: miner._period_key(period) for period in REPORT_PERIODS
+        }
         miner._daily_points_baseline_dirty = False
+        miner._period_points_baseline_dirty = False
+        miner._ensure_period_points_state()
         miner.streamer_follow_dates = {}
         miner.streamers_export_path = export_path
         miner.streamers_export_thread = None
         miner.streamers_export_interval_seconds = 600
         miner.running = False
-        miner.username = "tester"
         miner.watch_streak_cache = WatchStreakCache(default_account_name="tester")
         miner._watch_streak_days_lookup_attempted = set()
         miner._chat_ban_lookup_attempted = set()
@@ -93,20 +104,22 @@ class StreamersExportTest(unittest.TestCase):
                 checked_at=easyemi.stream.created_at,
                 account_name="tester",
             )
-            miner.daily_points_baseline = {
+            initial_points = {
                 "easyemi": 0,
                 "itsceydi": 0,
                 "rubia": 0,
             }
-            miner.daily_points_session_anchor = {
-                "easyemi": 0,
-                "itsceydi": 0,
-                "rubia": 0,
-            }
+            for period in REPORT_PERIODS:
+                miner.period_points_baseline[period] = dict(initial_points)
+                miner.period_points_session_anchor[period] = dict(initial_points)
+            miner._ensure_period_points_state()
 
             rows = miner._build_streamer_export_rows()
 
-            self.assertEqual([row["Streamer"] for row in rows], ["easyemi", "itsceydi", "rubia"])
+            self.assertEqual(
+                [row["Streamer"] for row in rows],
+                ["easyemi", "itsceydi", "rubia"],
+            )
             self.assertEqual(rows[0]["Points"], _millify(184880))
             self.assertEqual(rows[1]["Points"], _millify(82570))
             self.assertEqual(rows[2]["Points"], _millify(26870))
@@ -125,9 +138,15 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(rows[0]["Watchstreaks"], 12)
             self.assertEqual(rows[1]["Watchstreaks"], 0)
             self.assertEqual(rows[2]["Watchstreaks"], 0)
-            self.assertEqual(rows[0]["Points gained"], 470)
-            self.assertEqual(rows[1]["Points gained"], 0)
-            self.assertEqual(rows[2]["Points gained"], 999)
+            for column_name in [
+                "Daily Points",
+                "Weekly Points",
+                "Monthly Points",
+                "Yearly Points",
+            ]:
+                self.assertEqual(rows[0][column_name], 470)
+                self.assertEqual(rows[1][column_name], 0)
+                self.assertEqual(rows[2][column_name], 999)
 
     def test_points_gained_daily_starts_from_zero_without_baseline(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -141,9 +160,8 @@ class StreamersExportTest(unittest.TestCase):
             }
 
             miner.streamers = [streamer]
-
             rows = miner._build_streamer_export_rows()
-            self.assertEqual(rows[0]["Points gained"], 0)
+            self.assertEqual(rows[0]["Daily Points"], 0)
 
     def test_points_gained_persists_across_same_day_restart(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -155,7 +173,7 @@ class StreamersExportTest(unittest.TestCase):
             miner.streamers = [first_streamer]
 
             first_rows = miner._build_streamer_export_rows()
-            self.assertEqual(first_rows[0]["Points gained"], 0)
+            self.assertEqual(first_rows[0]["Daily Points"], 0)
             miner._save_daily_points_baseline_if_dirty()
 
             first_streamer.history = {
@@ -163,7 +181,7 @@ class StreamersExportTest(unittest.TestCase):
                 "CLAIM": {"counter": 1, "amount": 50},
             }
             updated_rows = miner._build_streamer_export_rows()
-            self.assertEqual(updated_rows[0]["Points gained"], 50)
+            self.assertEqual(updated_rows[0]["Daily Points"], 50)
             miner._save_daily_points_baseline_if_dirty()
 
             restarted = self._make_miner(export_path)
@@ -174,7 +192,7 @@ class StreamersExportTest(unittest.TestCase):
             restarted.streamers = [second_streamer]
 
             second_rows = restarted._build_streamer_export_rows()
-            self.assertEqual(second_rows[0]["Points gained"], 50)
+            self.assertEqual(second_rows[0]["Daily Points"], 50)
 
     def test_points_gained_ignores_legacy_baseline_payload(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -199,7 +217,7 @@ class StreamersExportTest(unittest.TestCase):
             miner.streamers = [streamer]
 
             rows = miner._build_streamer_export_rows()
-            self.assertEqual(rows[0]["Points gained"], 0)
+            self.assertEqual(rows[0]["Daily Points"], 0)
 
     def test_points_gained_daily_resets_on_day_change(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -209,11 +227,54 @@ class StreamersExportTest(unittest.TestCase):
             streamer.history = {"WATCH": {"counter": 1, "amount": 120}}
 
             miner.streamers = [streamer]
-            miner.daily_points_day_key = "2000-01-01"
-            miner.daily_points_baseline = {"demo": 0}
+            miner.period_points_keys["daily"] = "2000-01-01"
+            miner.period_points_baseline["daily"] = {"demo": 0}
 
             rows = miner._build_streamer_export_rows()
-            self.assertEqual(rows[0]["Points gained"], 0)
+            self.assertEqual(rows[0]["Daily Points"], 0)
+
+    def test_report_points_can_be_negative_net_values(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            miner = self._make_miner(os.path.join(tmp_dir, "streamers.xlsx"))
+
+            streamer = Streamer("demo")
+            streamer.history = {
+                "WATCH": {"counter": 1, "amount": 30000},
+                "PREDICTION": {"counter": 1, "amount": -50000},
+            }
+            miner.streamers = [streamer]
+            for period in REPORT_PERIODS:
+                miner.period_points_baseline[period] = {"demo": 0}
+                miner.period_points_session_anchor[period] = {"demo": 0}
+            miner._ensure_period_points_state()
+
+            rows = miner._build_streamer_export_rows()
+
+            self.assertEqual(rows[0]["Daily Points"], -20000)
+            self.assertEqual(rows[0]["Weekly Points"], -20000)
+            self.assertEqual(rows[0]["Monthly Points"], -20000)
+            self.assertEqual(rows[0]["Yearly Points"], -20000)
+
+    def test_weekly_period_key_uses_iso_monday_to_sunday_week(self):
+        miner = self._make_miner("streamers.xlsx")
+
+        self.assertEqual(miner._period_key("weekly", datetime(2026, 6, 1)), "2026-W23")
+        self.assertEqual(miner._period_key("weekly", datetime(2026, 6, 7)), "2026-W23")
+        self.assertEqual(miner._period_key("weekly", datetime(2026, 6, 8)), "2026-W24")
+
+    def test_enabled_report_paths_follow_configured_periods(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            miner = self._make_miner(os.path.join(tmp_dir, "report.xlsx"))
+            miner.weekly_reports = True
+            miner.monthly_reports = True
+            miner.yearly_reports = True
+
+            filenames = [os.path.basename(path) for path in miner._enabled_report_paths()]
+
+            self.assertIn(f"weekly_report_{miner._period_key('weekly')}_tester.xlsx", filenames)
+            self.assertTrue(any(filename.startswith("monthly_report_") for filename in filenames))
+            self.assertIn(f"yearly_report_{miner._period_key('yearly')}_tester.xlsx", filenames)
+            self.assertEqual(len(filenames), 4)
 
     def test_watch_streak_days_fetches_twitch_value_when_cache_is_missing_days(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -328,7 +389,10 @@ class StreamersExportTest(unittest.TestCase):
                     "Sub": "yes",
                     "Banned": "yes",
                     "Watchstreaks": 26,
-                    "Points gained": 460,
+                    "Daily Points": 460,
+                    "Weekly Points": -10,
+                    "Monthly Points": 0,
+                    "Yearly Points": 0,
                 }
             ]
 
@@ -338,7 +402,19 @@ class StreamersExportTest(unittest.TestCase):
             workbook = load_workbook(export_path)
             sheet = workbook.active
 
-            for header in ["A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1"]:
+            for header in [
+                "A1",
+                "B1",
+                "C1",
+                "D1",
+                "E1",
+                "F1",
+                "G1",
+                "H1",
+                "I1",
+                "J1",
+                "K1",
+            ]:
                 self.assertTrue(sheet[header].font.bold)
                 self.assertEqual(sheet[header].alignment.horizontal, "center")
                 self.assertEqual(sheet[header].fill.fill_type, "solid")
@@ -354,10 +430,10 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(len(sheet.tables), 1)
 
             table = next(iter(sheet.tables.values()))
-            self.assertEqual(table.ref, "A1:H2")
+            self.assertEqual(table.ref, "A1:K2")
             self.assertEqual(table.tableStyleInfo.name, "TableStyleMedium2")
             self.assertTrue(table.tableStyleInfo.showRowStripes)
-            self.assertEqual(table.autoFilter.ref, "A1:H2")
+            self.assertEqual(table.autoFilter.ref, "A1:K2")
 
             self.assertIsNone(sheet["A2"].hyperlink)
             self.assertIsNone(sheet["A2"].alignment.horizontal)
@@ -368,6 +444,9 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(sheet["F2"].alignment.horizontal, "center")
             self.assertEqual(sheet["G2"].alignment.horizontal, "center")
             self.assertEqual(sheet["H2"].alignment.horizontal, "right")
+            self.assertEqual(sheet["I2"].alignment.horizontal, "right")
+            self.assertEqual(sheet["J2"].alignment.horizontal, "right")
+            self.assertEqual(sheet["K2"].alignment.horizontal, "right")
 
             self.assertEqual(sheet["C2"].number_format, "DD.MM.YYYY")
             self.assertEqual(sheet["D2"].number_format, "DD.MM.YYYY")
@@ -378,6 +457,7 @@ class StreamersExportTest(unittest.TestCase):
             self.assertIsNone(sheet["F2"].fill.fill_type)
             self.assertTrue((sheet["G2"].fill.fgColor.rgb or "").endswith("E8F5E9"))
             self.assertTrue((sheet["H2"].fill.fgColor.rgb or "").endswith("F1F8E9"))
+            self.assertTrue((sheet["I2"].font.color.rgb or "").endswith("C62828"))
             self.assertTrue(
                 any(str(entry.sqref).startswith("H2") for entry in sheet.conditional_formatting)
             )
@@ -389,7 +469,10 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(sheet.column_dimensions["E"].width, 8)
             self.assertEqual(sheet.column_dimensions["F"].width, 10)
             self.assertEqual(sheet.column_dimensions["G"].width, 14)
-            self.assertEqual(sheet.column_dimensions["H"].width, 15)
+            self.assertEqual(sheet.column_dimensions["H"].width, 13)
+            self.assertEqual(sheet.column_dimensions["I"].width, 14)
+            self.assertEqual(sheet.column_dimensions["J"].width, 15)
+            self.assertEqual(sheet.column_dimensions["K"].width, 14)
 
     def test_write_streamers_xlsx_rolls_to_new_date_file(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -406,7 +489,10 @@ class StreamersExportTest(unittest.TestCase):
                     "Sub": "yes",
                     "Banned": "yes",
                     "Watchstreaks": 26,
-                    "Points gained": 460,
+                    "Daily Points": 460,
+                    "Weekly Points": 0,
+                    "Monthly Points": 0,
+                    "Yearly Points": 0,
                 }
             ]
 
@@ -435,7 +521,10 @@ class StreamersExportTest(unittest.TestCase):
                     "Sub": "no",
                     "Banned": "no",
                     "Watchstreaks": 0,
-                    "Points gained": 0,
+                    "Daily Points": 0,
+                    "Weekly Points": 0,
+                    "Monthly Points": 0,
+                    "Yearly Points": 0,
                 }
             ]
 

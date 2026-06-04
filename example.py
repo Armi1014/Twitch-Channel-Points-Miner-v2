@@ -28,6 +28,7 @@ from TwitchChannelPointsMiner.classes.entities.Bet import (
     Strategy,
 )
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    PlaybackSimulationMode,
     Streamer,
     StreamerSettings,
 )
@@ -146,6 +147,7 @@ LOGGER_SETTINGS = LoggerSettings(
 # These defaults apply to every streamer unless that streamer overrides them.
 # `points_limit` skips channels that already have at least that many points.
 # Set it to `None` to disable the limit. Pending watch streaks still bypass it.
+# `ALWAYS` keeps Twitch HLS playback simulation enabled for Drops/subgift behavior.
 DEFAULT_STREAMER_SETTINGS = StreamerSettings(
     make_predictions=True,
     follow_raid=True,
@@ -154,6 +156,7 @@ DEFAULT_STREAMER_SETTINGS = StreamerSettings(
     watch_streak=True,
     points_limit=None,
     community_goals=False,
+    playback_simulation=PlaybackSimulationMode.ALWAYS,
     chat=ChatPresence.ONLINE,
     bet=BetSettings(
         strategy=Strategy.SMART,
@@ -180,6 +183,10 @@ CLAIM_DROPS_ON_STARTUP = False
 ENABLE_ANALYTICS = False
 DISABLE_SSL_CERT_VERIFICATION = False
 MATCH_MENTIONS_WITHOUT_AT = False
+DAILY_REPORTS = True
+WEEKLY_REPORTS = False
+MONTHLY_REPORTS = False
+YEARLY_REPORTS = False
 
 twitch_miner = TwitchChannelPointsMiner(
     username=USERNAME,
@@ -190,6 +197,10 @@ twitch_miner = TwitchChannelPointsMiner(
     disable_ssl_cert_verification=DISABLE_SSL_CERT_VERIFICATION,
     disable_at_in_nickname=MATCH_MENTIONS_WITHOUT_AT,
     use_hermes=USE_HERMES,
+    daily_reports=DAILY_REPORTS,
+    weekly_reports=WEEKLY_REPORTS,
+    monthly_reports=MONTHLY_REPORTS,
+    yearly_reports=YEARLY_REPORTS,
     watch_streak_max_parallel=WATCH_STREAK_MAX_PARALLEL,
     watch_streak_min_offline_seconds=WATCH_STREAK_OFFLINE_WAIT_SECONDS,
     logger_settings=LOGGER_SETTINGS,
@@ -198,6 +209,9 @@ twitch_miner = TwitchChannelPointsMiner(
 
 # Useful files written under logs/:
 # - report_YYYY-MM-DD_<account>.xlsx
+# - weekly_report_YYYY-Www_<account>.xlsx, when WEEKLY_REPORTS=True
+# - monthly_report_Month_YYYY_<account>.xlsx, when MONTHLY_REPORTS=True
+# - yearly_report_YYYY_<account>.xlsx, when YEARLY_REPORTS=True
 # - watch_streak_cache.<account>.json
 # - daily_points_baseline.<account>.json
 #

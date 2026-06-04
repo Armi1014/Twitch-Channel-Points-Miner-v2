@@ -52,7 +52,27 @@ class FavoritePriorityTest(unittest.TestCase):
         )
 
         selected_usernames = [streamers[i].username for i in selection]
-        self.assertEqual(selected_usernames, ["fav_mid_points", "fav_high_points"])
+        self.assertEqual(selected_usernames, ["fav_high_points", "fav_mid_points"])
+
+    def test_favorite_priority_uses_run_file_order_for_online_favorites(self):
+        twitch = Twitch("favorite-config-order", "ua")
+        twitch.max_watch_amount = 2
+
+        streamers = [
+            self._make_streamer("easyemi", favorite=True, subscribed=True, points=402680),
+            self._make_streamer("Honeypuu", favorite=True, subscribed=True, points=358050),
+            self._make_streamer("Mahluna", favorite=True, subscribed=True, points=40100),
+            self._make_streamer("kuhlsohn", favorite=True, subscribed=True, points=1000),
+        ]
+
+        selection = twitch._select_streamers_to_watch(
+            streamers,
+            list(range(len(streamers))),
+            [Priority.FAVORITE, Priority.SUBSCRIBED, Priority.POINTS_ASCENDING],
+        )
+
+        selected_usernames = [streamers[i].username for i in selection]
+        self.assertEqual(selected_usernames, ["easyemi", "honeypuu"])
 
     def test_favorite_priority_without_online_favorites_keeps_next_priorities(self):
         twitch = Twitch("favorite-no-online", "ua")

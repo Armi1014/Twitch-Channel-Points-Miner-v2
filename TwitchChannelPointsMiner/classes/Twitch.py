@@ -5,6 +5,7 @@
 
 
 import copy
+import json
 import logging
 import os
 import random
@@ -14,7 +15,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
 import requests
-# import json
 
 from pathlib import Path
 from secrets import choice, token_hex
@@ -783,7 +783,15 @@ class Twitch(object):
                 return candidate
         return None
 
-    def _fetch_playback_access_token(self, streamer) -> tuple[str, str] | None:
+    def _decode_playback_token_expiry(self, token_value: str) -> float | None:
+        try:
+            decoded = json.loads(token_value)
+        except (TypeError, ValueError):
+            return None
+        expires = decoded.get("expires") if isinstance(decoded, dict) else None
+        return float(expires) if isinstance(expires, (int, float)) else None
+
+    def _fetch_playback_access_token(self, streamer) -> dict | None:
         json_data = copy.deepcopy(GQLOperations.PlaybackAccessToken)
         json_data["variables"] = {
             "login": streamer.username,
@@ -829,14 +837,52 @@ class Twitch(object):
                 streamer.username,
             )
             return None
-        return signature, value
+        return {
+            "signature": signature,
+            "value": value,
+            "expires_at": self._decode_playback_token_expiry(value),
+        }
 
-    def _prime_stream_playback(self, streamer) -> bool:
+    def _get_or_update_playback_access_token(self, streamer) -> dict | None:
+        stream = getattr(streamer, "stream", None)
+        if stream is None:
+            return None
+
+        cached_token = getattr(stream, "playback_access_token", None)
+        expires_at = (
+            cached_token.get("expires_at") if isinstance(cached_token, dict) else None
+        )
+        if cached_token and expires_at is not None and expires_at > time.time() + 30:
+            return cached_token
+
         playback_token = self._fetch_playback_access_token(streamer)
         if playback_token is None:
-            return False
-        signature, value = playback_token
+            return None
 
+        stream.playback_access_token = playback_token
+        stream.hls_url = None
+        expires_at = playback_token.get("expires_at")
+        logger.debug(
+            "Obtained PlaybackAccessToken for %s%s",
+            streamer,
+            f", expires at {datetime.fromtimestamp(expires_at, timezone.utc).isoformat()}"
+            if expires_at is not None
+            else "",
+        )
+        return playback_token
+
+    def _get_hls_playlist_url(self, streamer) -> str | None:
+        stream = getattr(streamer, "stream", None)
+        if stream is None:
+            return None
+        if stream.hls_url:
+            return stream.hls_url
+
+        playback_token = self._get_or_update_playback_access_token(streamer)
+        if playback_token is None:
+            return None
+        signature = playback_token["signature"]
+        value = playback_token["value"]
         qualities_url = (
             f"https://usher.ttvnw.net/api/channel/hls/{streamer.username}.m3u8"
             f"?sig={signature}&token={value}"
@@ -854,7 +900,7 @@ class Twitch(object):
             qualities_response.status_code,
         )
         if qualities_response.status_code != 200:
-            return False
+            return None
 
         quality_url = self._last_http_url_from_playlist(qualities_response.text)
         if quality_url is None:
@@ -865,6 +911,14 @@ class Twitch(object):
                 streamer.username,
                 level=logging.DEBUG,
             )
+            return None
+
+        stream.hls_url = quality_url
+        return quality_url
+
+    def _prime_stream_playback(self, streamer) -> bool:
+        quality_url = self._get_hls_playlist_url(streamer)
+        if quality_url is None:
             return False
 
         stream_list_response = self._request_with_retry(
@@ -880,6 +934,7 @@ class Twitch(object):
             stream_list_response.status_code,
         )
         if stream_list_response.status_code != 200:
+            streamer.stream.hls_url = None
             return False
 
         stream_url = self._last_http_url_from_playlist(stream_list_response.text)
@@ -929,8 +984,8 @@ class Twitch(object):
                 getattr(settings, "playback_simulation", None)
             )
         except ValueError as exc:
-            logger.warning("%s; using %s", exc, PlaybackSimulationMode.EXCEPT_DROPS)
-            mode = PlaybackSimulationMode.EXCEPT_DROPS
+            logger.warning("%s; using %s", exc, PlaybackSimulationMode.ALWAYS)
+            mode = PlaybackSimulationMode.ALWAYS
 
         if mode is PlaybackSimulationMode.OFF:
             return False
@@ -1531,9 +1586,9 @@ class Twitch(object):
                 favorite_rank = (
                     0 if getattr(streamer.settings, "favorite", False) is True else 1
                 )
-                # FAVORITE should only split favorite vs non-favorite groups.
-                # Do not inject ORDER here; later priorities must still sort within each group.
-                key_parts.append(favorite_rank)
+                # Favorites keep run-file order; later priorities only sort non-favorites.
+                favorite_order = order_map.get(idx, idx) if favorite_rank == 0 else 0
+                key_parts.append((favorite_rank, favorite_order))
             elif prior == Priority.STREAK:
                 session = self._ensure_watch_streak_session(streamer, now)
                 eligible = self._session_is_eligible(session, streamer)
@@ -2486,6 +2541,8 @@ class Twitch(object):
         status = claim_result.get("status") if isinstance(claim_result, dict) else None
         if status is None:
             logger.warning("Drop claim response did not include a status for %s", drop)
+        else:
+            logger.debug("Drop claim response for %s returned status %s", drop, status)
         return status in ["ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"]
 
     def claim_all_drops_from_inventory(self):
@@ -2501,8 +2558,21 @@ class Twitch(object):
             for drop_dict in campaign.get("timeBasedDrops") or []:
                 drop = Drop(drop_dict)
                 drop.update(drop_dict.get("self") or {})
+                claimable_by_progress = (
+                    drop.is_claimed is False
+                    and drop.has_preconditions_met is not False
+                    and drop.current_minutes_watched >= drop.minutes_required
+                )
+                if claimable_by_progress and not drop.drop_instance_id:
+                    logger.warning(
+                        "Drop %s appears claimable by progress but Twitch did not provide dropInstanceID",
+                        drop,
+                    )
+                    continue
                 if drop.is_claimable is True:
+                    logger.debug("Inventory drop %s is claimable; attempting claim", drop)
                     drop.is_claimed = self.claim_drop(drop)
+                    logger.debug("Inventory drop %s claim result: %s", drop, drop.is_claimed)
                     time.sleep(random.uniform(5, 10))
 
     def __streamers_require_campaign_sync(self, streamers):

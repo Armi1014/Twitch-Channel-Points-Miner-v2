@@ -1,4 +1,5 @@
 import copy
+import logging
 from enum import Enum, auto
 from random import uniform
 
@@ -6,6 +7,10 @@ from millify import millify
 
 #from TwitchChannelPointsMiner.utils import char_decision_as_index, float_round
 from TwitchChannelPointsMiner.utils import float_round
+
+logger = logging.getLogger(__name__)
+MAX_PREDICTION_BET_POINTS = 200_000
+_prediction_cap_warning_logged = False
 
 
 class Strategy(Enum):
@@ -288,6 +293,8 @@ class Bet(object):
             return False, 0  # Default don't skip the bet
 
     def calculate(self, balance: int) -> dict:
+        global _prediction_cap_warning_logged
+
         self.decision = {"choice": None, "amount": 0, "id": None}
         if self.settings.strategy == Strategy.MOST_VOTED:
             self.decision["choice"] = self.__return_choice(OutcomeKeys.TOTAL_USERS)
@@ -328,9 +335,28 @@ class Bet(object):
             #index = char_decision_as_index(self.decision["choice"])
             index = self.decision["choice"]
             self.decision["id"] = self.outcomes[index]["id"]
+            configured_max_points = (
+                self.settings.max_points
+                if self.settings.max_points is not None
+                else 50000
+            )
+            effective_max_points = min(
+                configured_max_points,
+                MAX_PREDICTION_BET_POINTS,
+            )
+            if (
+                configured_max_points > MAX_PREDICTION_BET_POINTS
+                and _prediction_cap_warning_logged is False
+            ):
+                logger.warning(
+                    "Prediction max_points=%s exceeds Twitch's observed limit; clamping placed bets to %s",
+                    configured_max_points,
+                    MAX_PREDICTION_BET_POINTS,
+                )
+                _prediction_cap_warning_logged = True
             self.decision["amount"] = min(
                 int(balance * (self.settings.percentage / 100)),
-                self.settings.max_points,
+                effective_max_points,
             )
             if (
                 self.settings.stealth_mode is True

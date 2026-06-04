@@ -75,6 +75,13 @@ logging.getLogger("seleniumwire").setLevel(logging.ERROR)
 logging.getLogger("websocket").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
+REPORT_PERIODS = ("daily", "weekly", "monthly", "yearly")
+REPORT_POINT_COLUMNS = {
+    "daily": "Daily Points",
+    "weekly": "Weekly Points",
+    "monthly": "Monthly Points",
+    "yearly": "Yearly Points",
+}
 
 
 class TwitchChannelPointsMiner:
@@ -105,6 +112,10 @@ class TwitchChannelPointsMiner:
         "streamers_export_path",
         "streamers_export_thread",
         "streamers_export_interval_seconds",
+        "daily_reports",
+        "weekly_reports",
+        "monthly_reports",
+        "yearly_reports",
         "streamer_follow_dates",
         "daily_points_baseline_path",
         "daily_points_day_key",
@@ -112,6 +123,11 @@ class TwitchChannelPointsMiner:
         "daily_points_snapshot",
         "daily_points_session_anchor",
         "_daily_points_baseline_dirty",
+        "period_points_baseline",
+        "period_points_snapshot",
+        "period_points_session_anchor",
+        "period_points_keys",
+        "_period_points_baseline_dirty",
         "_watch_streak_days_lookup_attempted",
         "_chat_ban_lookup_attempted",
     ]
@@ -133,6 +149,10 @@ class TwitchChannelPointsMiner:
         watch_streak_max_parallel: int | None = None,
         watch_streak_min_offline_seconds: int = MIN_OFFLINE_FOR_NEW_STREAK,
         use_hermes: bool = True,
+        daily_reports: bool = True,
+        weekly_reports: bool = False,
+        monthly_reports: bool = False,
+        yearly_reports: bool = False,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -210,6 +230,10 @@ class TwitchChannelPointsMiner:
         )
         self.streamers_export_thread = None
         self.streamers_export_interval_seconds = 10 * 60
+        self.daily_reports = bool(daily_reports)
+        self.weekly_reports = bool(weekly_reports)
+        self.monthly_reports = bool(monthly_reports)
+        self.yearly_reports = bool(yearly_reports)
         self.streamer_follow_dates = {}
         self.daily_points_baseline_path = os.path.join(
             "logs", f"daily_points_baseline.{safe_account_name}.json"
@@ -219,6 +243,11 @@ class TwitchChannelPointsMiner:
         self.daily_points_snapshot = {}
         self.daily_points_session_anchor = {}
         self._daily_points_baseline_dirty = False
+        self.period_points_baseline = {}
+        self.period_points_snapshot = {}
+        self.period_points_session_anchor = {}
+        self.period_points_keys = {}
+        self._period_points_baseline_dirty = False
         self._watch_streak_days_lookup_attempted = set()
         self._chat_ban_lookup_attempted = set()
         self._load_daily_points_baseline()
@@ -350,6 +379,45 @@ class TwitchChannelPointsMiner:
             output_dir, f"report_{report_date}_{self._safe_account_name()}.xlsx"
         )
 
+    def _report_output_dir(self) -> str:
+        return os.path.dirname(self.streamers_export_path) or "logs"
+
+    def _period_report_path(self, period: str) -> str:
+        output_dir = self._report_output_dir()
+        account_name = self._safe_account_name()
+        now = datetime.now()
+        if period == "daily":
+            return self._current_streamers_export_path()
+        if period == "weekly":
+            return os.path.join(
+                output_dir,
+                f"weekly_report_{self._period_key('weekly', now)}_{account_name}.xlsx",
+            )
+        if period == "monthly":
+            return os.path.join(
+                output_dir,
+                f"monthly_report_{now.strftime('%B')}_{now.strftime('%Y')}_{account_name}.xlsx",
+            )
+        if period == "yearly":
+            return os.path.join(
+                output_dir,
+                f"yearly_report_{now.strftime('%Y')}_{account_name}.xlsx",
+            )
+        raise ValueError(f"Unknown report period: {period}")
+
+    def _enabled_report_paths(self) -> list[str]:
+        enabled = {
+            "daily": self.daily_reports,
+            "weekly": self.weekly_reports,
+            "monthly": self.monthly_reports,
+            "yearly": self.yearly_reports,
+        }
+        return [
+            self._period_report_path(period)
+            for period in REPORT_PERIODS
+            if enabled.get(period)
+        ]
+
     def _refresh_streamers_export_path_if_needed(self) -> None:
         if not self._uses_dated_streamers_export_path():
             return
@@ -404,31 +472,91 @@ class TwitchChannelPointsMiner:
             amount = entry.get("amount", 0)
             if isinstance(amount, (int, float)):
                 total += int(amount)
-        return max(0, total)
+        return total
+
+    def _period_key(self, period: str, now: datetime | None = None) -> str:
+        current = now or datetime.now()
+        if period == "daily":
+            return current.strftime("%Y-%m-%d")
+        if period == "weekly":
+            iso_year, iso_week, _ = current.isocalendar()
+            return f"{iso_year}-W{iso_week:02d}"
+        if period == "monthly":
+            return current.strftime("%Y-%m")
+        if period == "yearly":
+            return current.strftime("%Y")
+        raise ValueError(f"Unknown report period: {period}")
+
+    def _ensure_period_points_state(self) -> None:
+        for period in REPORT_PERIODS:
+            self.period_points_baseline.setdefault(period, {})
+            self.period_points_snapshot.setdefault(period, {})
+            self.period_points_session_anchor.setdefault(period, {})
+            self.period_points_keys.setdefault(period, self._period_key(period))
+        self.daily_points_day_key = self.period_points_keys["daily"]
+        self.daily_points_baseline = self.period_points_baseline["daily"]
+        self.daily_points_snapshot = self.period_points_snapshot["daily"]
+        self.daily_points_session_anchor = self.period_points_session_anchor["daily"]
 
     def _reset_daily_points_baseline_if_needed(self) -> None:
-        day_key = datetime.now().strftime("%Y-%m-%d")
-        if day_key != self.daily_points_day_key:
-            self.daily_points_day_key = day_key
-            self.daily_points_baseline = {}
-            self.daily_points_snapshot = {}
-            self.daily_points_session_anchor = {}
-            self._daily_points_baseline_dirty = True
+        self._reset_period_points_baseline_if_needed()
+
+    def _reset_period_points_baseline_if_needed(self) -> None:
+        self._ensure_period_points_state()
+        for period in REPORT_PERIODS:
+            period_key = self._period_key(period)
+            if self.period_points_keys.get(period) != period_key:
+                self.period_points_keys[period] = period_key
+                self.period_points_baseline[period] = {}
+                self.period_points_snapshot[period] = {}
+                self.period_points_session_anchor[period] = {}
+                self._period_points_baseline_dirty = True
+                if period == "daily":
+                    self._daily_points_baseline_dirty = True
+        self._ensure_period_points_state()
 
     def _load_daily_points_baseline(self) -> None:
         path = getattr(self, "daily_points_baseline_path", None)
-        today = datetime.now().strftime("%Y-%m-%d")
-        self.daily_points_day_key = today
-        self.daily_points_baseline = {}
-        self.daily_points_snapshot = {}
-        self.daily_points_session_anchor = {}
+        self.period_points_baseline = {period: {} for period in REPORT_PERIODS}
+        self.period_points_snapshot = {period: {} for period in REPORT_PERIODS}
+        self.period_points_session_anchor = {period: {} for period in REPORT_PERIODS}
+        self.period_points_keys = {
+            period: self._period_key(period) for period in REPORT_PERIODS
+        }
+        self._period_points_baseline_dirty = False
         self._daily_points_baseline_dirty = False
+        self._ensure_period_points_state()
         if not path:
             return
 
         payload = load_json(path, {})
         if not isinstance(payload, dict):
             return
+
+        periods = payload.get("periods")
+        if isinstance(periods, dict):
+            for period in REPORT_PERIODS:
+                bucket = periods.get(period)
+                if not isinstance(bucket, dict):
+                    continue
+                if bucket.get("period_key") != self._period_key(period):
+                    continue
+                self.period_points_keys[period] = bucket["period_key"]
+                points = bucket.get("points")
+                if not isinstance(points, dict):
+                    continue
+                for username, value in points.items():
+                    try:
+                        self.period_points_baseline[period][str(username)] = int(value)
+                    except Exception:
+                        continue
+                self.period_points_snapshot[period] = dict(
+                    self.period_points_baseline[period]
+                )
+            self._ensure_period_points_state()
+            return
+
+        today = self._period_key("daily")
         if payload.get("day_key") != today:
             return
 
@@ -447,57 +575,85 @@ class TwitchChannelPointsMiner:
         normalized_baseline = {}
         for username, value in stored_points.items():
             try:
-                normalized_baseline[str(username)] = max(0, int(value))
+                normalized_baseline[str(username)] = int(value)
             except Exception:
                 continue
-        self.daily_points_baseline = normalized_baseline
-        self.daily_points_snapshot = dict(normalized_baseline)
+        self.period_points_baseline["daily"] = normalized_baseline
+        self.period_points_snapshot["daily"] = dict(normalized_baseline)
+        self._ensure_period_points_state()
 
     def _save_daily_points_baseline_if_dirty(self) -> None:
-        if not getattr(self, "_daily_points_baseline_dirty", False):
+        if not (
+            getattr(self, "_daily_points_baseline_dirty", False)
+            or getattr(self, "_period_points_baseline_dirty", False)
+        ):
             return
         path = getattr(self, "daily_points_baseline_path", None)
         if not path:
             return
+        self._ensure_period_points_state()
 
         dump_json(
             path,
             {
-                "schema_version": 2,
-                "day_key": self.daily_points_day_key,
-                "points_gained": self.daily_points_snapshot,
+                "schema_version": 3,
+                "day_key": self.period_points_keys["daily"],
+                "points_gained": self.period_points_snapshot["daily"],
+                "periods": {
+                    period: {
+                        "period_key": self.period_points_keys[period],
+                        "points": self.period_points_snapshot[period],
+                    }
+                    for period in REPORT_PERIODS
+                },
             },
         )
         self._daily_points_baseline_dirty = False
+        self._period_points_baseline_dirty = False
 
     def _points_gained(self, streamer: Streamer) -> int:
-        self._reset_daily_points_baseline_if_needed()
+        return self._points_for_period(streamer, "daily")
 
+    def _points_for_period(self, streamer: Streamer, period: str) -> int:
+        self._reset_period_points_baseline_if_needed()
         current_total = self._history_points_total(streamer)
         username = streamer.username
-        carried_total = max(0, int(self.daily_points_baseline.get(username, 0)))
-        anchor = self.daily_points_session_anchor.get(username)
+        carried_total = int(self.period_points_baseline[period].get(username, 0))
+        anchor = self.period_points_session_anchor[period].get(username)
         if anchor is None:
-            self.daily_points_session_anchor[username] = current_total
+            self.period_points_session_anchor[period][username] = current_total
             return carried_total
 
-        session_delta = max(0, int(current_total - anchor))
-        return max(0, int(carried_total + session_delta))
+        session_delta = int(current_total - anchor)
+        return int(carried_total + session_delta)
 
     def _sync_daily_points_snapshot(self, rows: list[dict[str, str]]) -> None:
-        snapshot = {}
-        for row in rows:
-            username = str(row.get("Streamer", "")).strip()
-            if not username:
-                continue
-            try:
-                snapshot[username] = max(0, int(row.get("Points gained", 0)))
-            except Exception:
-                snapshot[username] = 0
+        self._sync_period_points_snapshot(rows)
 
-        if snapshot != self.daily_points_snapshot:
-            self.daily_points_snapshot = snapshot
-            self._daily_points_baseline_dirty = True
+    def _sync_period_points_snapshot(self, rows: list[dict[str, str]]) -> None:
+        self._ensure_period_points_state()
+        changed = False
+        for period in REPORT_PERIODS:
+            column_name = REPORT_POINT_COLUMNS[period]
+            snapshot = {}
+            for row in rows:
+                username = str(row.get("Streamer", "")).strip()
+                if not username:
+                    continue
+                try:
+                    snapshot[username] = int(row.get(column_name, 0))
+                except Exception:
+                    snapshot[username] = 0
+
+            if snapshot != self.period_points_snapshot[period]:
+                self.period_points_snapshot[period] = snapshot
+                changed = True
+                if period == "daily":
+                    self._daily_points_baseline_dirty = True
+
+        if changed:
+            self._period_points_baseline_dirty = True
+            self._ensure_period_points_state()
 
     def _fetch_watch_streak_days_from_twitch(self, streamer: Streamer) -> int | None:
         twitch = getattr(self, "twitch", None)
@@ -649,15 +805,24 @@ class TwitchChannelPointsMiner:
                         self._fetch_chat_ban_status_from_twitch(streamer)
                     ),
                     "Watchstreaks": self._watch_streak_days(streamer),
-                    "Points gained": self._points_gained(streamer),
+                    "Daily Points": self._points_for_period(streamer, "daily"),
+                    "Weekly Points": self._points_for_period(streamer, "weekly"),
+                    "Monthly Points": self._points_for_period(streamer, "monthly"),
+                    "Yearly Points": self._points_for_period(streamer, "yearly"),
                 }
             )
-        self._sync_daily_points_snapshot(rows)
+        self._sync_period_points_snapshot(rows)
         return rows
 
-    def _write_streamers_xlsx(self, rows: list[dict[str, str]]) -> None:
-        self._refresh_streamers_export_path_if_needed()
-        output_dir = os.path.dirname(self.streamers_export_path) or "."
+    def _write_streamers_xlsx(
+        self,
+        rows: list[dict[str, str]],
+        output_path: str | None = None,
+    ) -> None:
+        if output_path is None:
+            self._refresh_streamers_export_path_if_needed()
+            output_path = self.streamers_export_path
+        output_dir = os.path.dirname(output_path) or "."
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
         data_frame = pd.DataFrame(
@@ -670,7 +835,10 @@ class TwitchChannelPointsMiner:
                 "Sub",
                 "Banned",
                 "Watchstreaks",
-                "Points gained",
+                "Daily Points",
+                "Weekly Points",
+                "Monthly Points",
+                "Yearly Points",
             ],
         )
 
@@ -687,7 +855,7 @@ class TwitchChannelPointsMiner:
             self._style_streamers_export_sheet(sheet)
 
             workbook.save(tmp_path)
-            os.replace(tmp_path, self.streamers_export_path)
+            os.replace(tmp_path, output_path)
         finally:
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
@@ -733,24 +901,32 @@ class TwitchChannelPointsMiner:
         sub_idx = header_names.get("Sub")
         banned_idx = header_names.get("Banned")
         watch_idx = header_names.get("Watchstreaks")
-        gained_idx = header_names.get("Points gained")
-        max_points_gained = 0
+        point_column_indices = [
+            header_names[column_name]
+            for column_name in REPORT_POINT_COLUMNS.values()
+            if column_name in header_names
+        ]
+        max_positive_points = {col_idx: 0 for col_idx in point_column_indices}
 
         for row_idx in range(2, sheet.max_row + 1):
             if points_idx is not None:
                 sheet.cell(row=row_idx, column=points_idx).alignment = Alignment(
                     horizontal="right", vertical="center"
                 )
-            if gained_idx is not None:
-                gained_cell = sheet.cell(row=row_idx, column=gained_idx)
-                gained_cell.alignment = Alignment(
+            for point_idx in point_column_indices:
+                point_cell = sheet.cell(row=row_idx, column=point_idx)
+                point_cell.alignment = Alignment(
                     horizontal="right", vertical="center"
                 )
-                if isinstance(gained_cell.value, (int, float)):
-                    max_points_gained = max(max_points_gained, int(gained_cell.value))
-                if isinstance(gained_cell.value, (int, float)) and gained_cell.value > 0:
-                    gained_cell.font = Font(color="2E7D32", bold=True)
-                    gained_cell.fill = soft_success_fill
+                if isinstance(point_cell.value, (int, float)):
+                    max_positive_points[point_idx] = max(
+                        max_positive_points[point_idx], int(point_cell.value)
+                    )
+                    if point_cell.value > 0:
+                        point_cell.font = Font(color="2E7D32", bold=True)
+                        point_cell.fill = soft_success_fill
+                    elif point_cell.value < 0:
+                        point_cell.font = Font(color="C62828", bold=True)
             if followdate_idx is not None:
                 sheet.cell(row=row_idx, column=followdate_idx).alignment = Alignment(
                     horizontal="center", vertical="center"
@@ -793,11 +969,13 @@ class TwitchChannelPointsMiner:
             )
             sheet.add_table(table)
 
-            if gained_idx is not None and max_points_gained > 0:
-                gained_column_letter = get_column_letter(gained_idx)
-                gained_range = f"{gained_column_letter}2:{gained_column_letter}{sheet.max_row}"
+            for point_idx, max_points in max_positive_points.items():
+                if max_points <= 0:
+                    continue
+                point_column_letter = get_column_letter(point_idx)
+                point_range = f"{point_column_letter}2:{point_column_letter}{sheet.max_row}"
                 sheet.conditional_formatting.add(
-                    gained_range,
+                    point_range,
                     DataBarRule(
                         start_type="num",
                         start_value=0,
@@ -816,7 +994,10 @@ class TwitchChannelPointsMiner:
             "Sub": 8,
             "Banned": 10,
             "Watchstreaks": 14,
-            "Points gained": 15,
+            "Daily Points": 13,
+            "Weekly Points": 14,
+            "Monthly Points": 15,
+            "Yearly Points": 14,
         }
 
         for col_idx in range(1, sheet.max_column + 1):
@@ -826,13 +1007,16 @@ class TwitchChannelPointsMiner:
                 sheet.column_dimensions[get_column_letter(col_idx)].width = width
 
     def _export_streamers_snapshot(self) -> None:
+        report_paths = self._enabled_report_paths()
+        if not report_paths:
+            return
         try:
             rows = self._build_streamer_export_rows()
-            self._write_streamers_xlsx(rows)
+            for report_path in report_paths:
+                self._write_streamers_xlsx(rows, report_path)
         except Exception as exc:
             logger.warning(
-                "Failed to update streamers export %s: %s",
-                self.streamers_export_path,
+                "Failed to update streamers export: %s",
                 exc,
             )
         finally:

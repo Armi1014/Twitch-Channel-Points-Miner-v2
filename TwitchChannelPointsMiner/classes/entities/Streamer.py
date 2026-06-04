@@ -26,7 +26,7 @@ class PlaybackSimulationMode(Enum):
         if isinstance(value, cls):
             return value
         if value is None:
-            return cls.EXCEPT_DROPS
+            return cls.ALWAYS
         if isinstance(value, str):
             normalized = value.strip().replace("-", "_").upper()
             for mode in cls:

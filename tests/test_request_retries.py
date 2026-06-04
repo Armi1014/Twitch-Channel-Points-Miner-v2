@@ -231,7 +231,14 @@ class RequestRetryTest(unittest.TestCase):
         ) as mocked_post:
             token = self.twitch._fetch_playback_access_token(streamer)
 
-        self.assertEqual(token, ("test-signature", "test-token"))
+        self.assertEqual(
+            token,
+            {
+                "signature": "test-signature",
+                "value": "test-token",
+                "expires_at": None,
+            },
+        )
         json_data = mocked_post.call_args.args[0]
         self.assertEqual(json_data["operationName"], "PlaybackAccessToken")
         self.assertEqual(
@@ -253,7 +260,11 @@ class RequestRetryTest(unittest.TestCase):
         with patch.object(
             Twitch,
             "_fetch_playback_access_token",
-            return_value=("test-signature", "test-token"),
+            return_value={
+                "signature": "test-signature",
+                "value": "test-token",
+                "expires_at": None,
+            },
         ), patch.object(
             Twitch,
             "_request_with_retry",

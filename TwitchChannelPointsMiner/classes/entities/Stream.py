@@ -21,6 +21,8 @@ class Stream(object):
         "viewers_count",
         "spade_url",
         "payload",
+        "playback_access_token",
+        "hls_url",
         "watch_streak_missing",
         "minute_watched",
         "watch_count",
@@ -45,6 +47,8 @@ class Stream(object):
 
         self.spade_url = None
         self.payload = None
+        self.playback_access_token = None
+        self.hls_url = None
 
         self.created_at = None
 
@@ -67,6 +71,8 @@ class Stream(object):
             # New broadcast started while stream is still online.
             self.init_watch_streak()
             self.created_at = None
+            self.playback_access_token = None
+            self.hls_url = None
 
         self.broadcast_id = broadcast_id
         self.title = title.strip()

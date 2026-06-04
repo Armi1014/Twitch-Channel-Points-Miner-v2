@@ -2,7 +2,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import TwitchChannelPointsMiner.classes.entities.Bet as bet_module
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
+from TwitchChannelPointsMiner.classes.entities.Bet import (
+    Bet,
+    BetSettings,
+    MAX_PREDICTION_BET_POINTS,
+    Strategy,
+)
 
 
 class FakeBet:
@@ -67,6 +74,43 @@ class MakePredictionsTest(unittest.TestCase):
 
         mocked_warning.assert_called_once()
         mocked_error.assert_not_called()
+
+    def test_prediction_amount_is_clamped_to_twitch_limit(self):
+        bet_module._prediction_cap_warning_logged = False
+        settings = BetSettings(
+            strategy=Strategy.NUMBER_1,
+            percentage=100,
+            max_points=500000,
+            stealth_mode=False,
+        )
+        settings.default()
+        bet = Bet(
+            [
+                {
+                    "id": "outcome-1",
+                    "title": "Blue",
+                    "color": "BLUE",
+                    "total_users": 1,
+                    "total_points": 1,
+                },
+                {
+                    "id": "outcome-2",
+                    "title": "Pink",
+                    "color": "PINK",
+                    "total_users": 1,
+                    "total_points": 1,
+                },
+            ],
+            settings,
+        )
+
+        with patch(
+            "TwitchChannelPointsMiner.classes.entities.Bet.logger.warning"
+        ) as mocked_warning:
+            decision = bet.calculate(999999)
+
+        self.assertEqual(decision["amount"], MAX_PREDICTION_BET_POINTS)
+        mocked_warning.assert_called_once()
 
 
 if __name__ == "__main__":
