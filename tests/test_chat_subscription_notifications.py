@@ -208,10 +208,12 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
                     {
                         "type": "notification",
                         "notification": {
-                            "pubsub": {
-                                "user_id": "123",
-                                "channel_id": "456",
-                            }
+                            "pubsub": json.dumps(
+                                {
+                                    "user_id": "123",
+                                    "channel_id": "456",
+                                }
+                            )
                         },
                     }
                 ),

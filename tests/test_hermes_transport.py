@@ -233,13 +233,20 @@ class HermesTransportTest(unittest.TestCase):
             (
                 PubsubTopic("user-subscribe-events-v1", user_id="123"),
                 {
-                    "type": "gifted-sub-notification",
-                    "server_time": 1704067200,
                     "notification": {
-                        "pubsub": {"channel_id": "456"},
+                        "subscription": {"id": "sub-1"},
+                        "type": "pubsub",
+                        "pubsub": json.dumps(
+                            {
+                                "user_id": "123",
+                                "channel_id": "456",
+                            }
+                        ),
                     },
+                    "id": "notification-1",
+                    "timestamp": "2026-06-15T15:36:20.26253556Z",
                 },
-                "gifted-sub-notification",
+                "pubsub",
                 "123",
             ),
             (

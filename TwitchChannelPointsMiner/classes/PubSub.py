@@ -1,4 +1,5 @@
 import abc
+import json
 import logging
 import time
 from threading import Timer
@@ -34,6 +35,18 @@ class PubSubHandler(MessageListener):
         self.streamers = streamers
         self.events_predictions = events_predictions
 
+    @staticmethod
+    def _decode_pubsub_payload(payload):
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            try:
+                decoded = json.loads(payload)
+            except (TypeError, ValueError):
+                return None
+            return decoded if isinstance(decoded, dict) else None
+        return None
+
     def on_message(self, message: Message):
         streamer_index = get_streamer_index(self.streamers, message.channel_id)
         if streamer_index == -1 and message.topic not in USER_NOTIFICATION_TOPICS:
@@ -42,7 +55,7 @@ class PubSubHandler(MessageListener):
         try:
             if message.topic == "user-subscribe-events-v1":
                 notification = message.message.get("notification", {})
-                pubsub = (
+                pubsub = self._decode_pubsub_payload(
                     notification.get("pubsub")
                     if isinstance(notification, dict)
                     else None
