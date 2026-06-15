@@ -73,6 +73,7 @@ This fork can send `Events.SUBSCRIPTION` notifications to Discord or other webho
 What it does:
 
 * listens for Twitch IRC `USERNOTICE` events
+* listens for Twitch websocket gift-sub signals that can arrive even when the account is not present in chat
 * formats a cleaner subscription message with the streamer/channel and current points
 * only alerts for subscription events that are about **your own account**
 
@@ -91,11 +92,23 @@ What it ignores:
 
 Important:
 
-* this depends on IRC chat being enabled for that streamer
-* `chat=ChatPresence.NEVER` disables this feature for that channel
+* IRC subscription notices still depend on chat being enabled for that streamer
+* `chat=ChatPresence.NEVER` disables only the IRC subscription path for that channel
+* websocket gift-sub notices use the same `Events.SUBSCRIPTION` notification format and are locally deduped
 * `chat=ChatPresence.ONLINE` is enough
 
 See [example.py](example.py) for a basic Discord webhook configuration example.
+
+## Reports And State Files
+
+Reports are written under `logs/reports/` by period:
+
+* `logs/reports/daily/`
+* `logs/reports/weekly/`
+* `logs/reports/monthly/`
+* `logs/reports/yearly/`
+
+Local state files are kept in `logs/.state/`, including watch streak cache, daily points baselines, and subscription notification dedupe data. On first startup after updating, legacy state files from `logs/` are copied into `logs/.state/` automatically and the old files are left in place as backups.
 
 ## Docs
 

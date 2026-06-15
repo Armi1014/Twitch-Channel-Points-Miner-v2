@@ -233,6 +233,21 @@ class GQLOperations:
             }
         },
     }
+    SubscriptionsManagement_SubscriptionBenefits = {
+        "operationName": "SubscriptionsManagement_SubscriptionBenefits",
+        "variables": {
+            "cursor": "",
+            "filter": "GIFT",
+            "limit": 100,
+            "platform": "WEB",
+        },
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "b21eec80bf7f902cc52c3f6552cd79b0b651b61bf891c9033efef22c8c8bcca6",
+            }
+        },
+    }
     UserPointsContribution = {
         "operationName": "UserPointsContribution",
         "extensions": {

@@ -9,6 +9,7 @@ from TwitchChannelPointsMiner.WatchStreakCache import (
     STALE_SESSION_TTL_SECONDS,
     WatchStreakCache,
 )
+from TwitchChannelPointsMiner.TwitchChannelPointsMiner import TwitchChannelPointsMiner
 
 
 class WatchStreakCacheTest(unittest.TestCase):
@@ -81,6 +82,49 @@ class WatchStreakCacheTest(unittest.TestCase):
             )
             self.assertIsNotNone(cache.get_session("streamer-a", "b1"))
             self.assertIsNone(cache.get_session("streamer-b", "b2", account_name="acc_two"))
+
+    def test_miner_watch_streak_cache_path_copies_legacy_to_hidden_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            legacy_path = os.path.join(tmp_dir, "watch_streak_cache.tester.json")
+            hidden_path = os.path.join(
+                tmp_dir,
+                ".state",
+                "watch_streak_cache.tester.json",
+            )
+            payload = {
+                "version": 4,
+                "sessions": [
+                    {
+                        "account_name": "tester",
+                        "streamer_login": "streamer-a",
+                        "broadcast_id": "b1",
+                        "started_at": 1,
+                        "attempts": 0,
+                        "claimed": False,
+                        "last_attempt_at": None,
+                        "ended_at": None,
+                    }
+                ],
+                "streamer_statuses": [],
+            }
+            with open(legacy_path, "w", encoding="utf-8") as file_obj:
+                json.dump(payload, file_obj)
+
+            miner = TwitchChannelPointsMiner.__new__(TwitchChannelPointsMiner)
+            miner.username = "tester"
+            miner.watch_streak_cache_path = hidden_path
+
+            load_path = miner._watch_streak_cache_load_path()
+            cache = WatchStreakCache.load_from_disk(
+                load_path,
+                default_account_name="tester",
+                account_filter="tester",
+            )
+
+            self.assertEqual(load_path, hidden_path)
+            self.assertIsNotNone(cache.get_session("streamer-a", "b1"))
+            self.assertTrue(os.path.exists(hidden_path))
+            self.assertTrue(os.path.exists(legacy_path))
 
     def test_short_offline_gap_does_not_create_session_even_if_broadcast_changes(self):
         now = time.time()

@@ -738,7 +738,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertTrue(updated)
         mocked_info.assert_not_called()
 
-    def test_cleanup_ends_attempt_after_two_watch_events(self):
+    def test_cleanup_keeps_attempt_after_watch_events_without_streak(self):
         twitch = Twitch("watch-events-test", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="watch-events-test")
         streamer = self._make_streamer("streamer")
@@ -765,15 +765,15 @@ class WatchStreakMilestoneTest(unittest.TestCase):
 
         twitch._cleanup_streak_attempts([streamer], now)
 
-        self.assertFalse(streamer.stream.watch_streak_missing)
-        self.assertEqual(twitch._active_streak_attempts, {})
+        self.assertTrue(streamer.stream.watch_streak_missing)
+        self.assertIn(session.key(), twitch._active_streak_attempts)
         updated = twitch.watch_streak_cache.get_session(
             streamer.username,
             streamer.stream.broadcast_id,
             account_name=twitch.account_username,
         )
         self.assertIsNotNone(updated)
-        self.assertIsNotNone(updated.ended_at)
+        self.assertIsNone(updated.ended_at)
 
     def test_streak_selection_rotates_candidates_when_many_are_eligible(self):
         twitch = Twitch("rotation-test", "ua")

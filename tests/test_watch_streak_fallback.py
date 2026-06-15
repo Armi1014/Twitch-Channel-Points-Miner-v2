@@ -7,7 +7,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, Streame
 
 
 class WatchStreakFallbackTest(unittest.TestCase):
-    def test_watch_reward_ends_streak_attempt_without_watch_streak(self):
+    def test_watch_reward_does_not_complete_streak_without_watch_streak(self):
         twitch = Twitch("fallback-test", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="fallback-test")
 
@@ -51,9 +51,9 @@ class WatchStreakFallbackTest(unittest.TestCase):
         )
         self.assertIsNotNone(updated_session)
         self.assertFalse(updated_session.claimed)
-        self.assertIsNotNone(updated_session.ended_at)
-        self.assertFalse(streamer.stream.watch_streak_missing)
-        self.assertEqual(twitch._active_streak_attempts, {})
+        self.assertIsNone(updated_session.ended_at)
+        self.assertTrue(streamer.stream.watch_streak_missing)
+        self.assertIn(session.key(), twitch._active_streak_attempts)
 
 
 if __name__ == "__main__":

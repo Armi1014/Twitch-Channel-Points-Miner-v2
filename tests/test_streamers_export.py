@@ -31,6 +31,10 @@ class StreamersExportTest(unittest.TestCase):
             os.path.dirname(export_path) or ".",
             "daily_points_baseline.tester.json",
         )
+        miner.subscription_notification_cache_path = os.path.join(
+            os.path.dirname(export_path) or ".",
+            "subscription_notifications.tester.json",
+        )
         miner.period_points_baseline = {period: {} for period in REPORT_PERIODS}
         miner.period_points_snapshot = {period: {} for period in REPORT_PERIODS}
         miner.period_points_session_anchor = {period: {} for period in REPORT_PERIODS}
@@ -264,17 +268,63 @@ class StreamersExportTest(unittest.TestCase):
 
     def test_enabled_report_paths_follow_configured_periods(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            miner = self._make_miner(os.path.join(tmp_dir, "report.xlsx"))
+            miner = self._make_miner(
+                os.path.join(
+                    tmp_dir,
+                    "reports",
+                    "daily",
+                    "report_2026-03-05_tester.xlsx",
+                )
+            )
             miner.weekly_reports = True
             miner.monthly_reports = True
             miner.yearly_reports = True
 
-            filenames = [os.path.basename(path) for path in miner._enabled_report_paths()]
+            paths = miner._enabled_report_paths()
+            filenames = [os.path.basename(path) for path in paths]
 
             self.assertIn(f"weekly_report_{miner._period_key('weekly')}_tester.xlsx", filenames)
             self.assertTrue(any(filename.startswith("monthly_report_") for filename in filenames))
             self.assertIn(f"yearly_report_{miner._period_key('yearly')}_tester.xlsx", filenames)
             self.assertEqual(len(filenames), 4)
+            self.assertTrue(any(os.path.join("reports", "daily") in path for path in paths))
+            self.assertTrue(any(os.path.join("reports", "weekly") in path for path in paths))
+            self.assertTrue(any(os.path.join("reports", "monthly") in path for path in paths))
+            self.assertTrue(any(os.path.join("reports", "yearly") in path for path in paths))
+
+    def test_load_daily_points_baseline_copies_legacy_file_when_hidden_missing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            export_path = os.path.join(tmp_dir, "reports", "daily", "streamers.xlsx")
+            miner = self._make_miner(export_path)
+            miner.daily_points_baseline_path = os.path.join(
+                tmp_dir,
+                ".state",
+                "daily_points_baseline.tester.json",
+            )
+            legacy_path = os.path.join(tmp_dir, "daily_points_baseline.tester.json")
+            with open(legacy_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema_version": 3,
+                        "day_key": miner._period_key("daily"),
+                        "points_gained": {"demo": 55},
+                        "periods": {
+                            period: {
+                                "period_key": miner._period_key(period),
+                                "points": {"demo": index},
+                            }
+                            for index, period in enumerate(REPORT_PERIODS, start=1)
+                        },
+                    },
+                    handle,
+                )
+
+            miner._load_daily_points_baseline()
+
+            self.assertEqual(miner.period_points_baseline["daily"], {"demo": 1})
+            self.assertEqual(miner.period_points_baseline["weekly"], {"demo": 2})
+            self.assertTrue(os.path.exists(miner.daily_points_baseline_path))
+            self.assertTrue(os.path.exists(legacy_path))
 
     def test_watch_streak_days_fetches_twitch_value_when_cache_is_missing_days(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -473,6 +523,51 @@ class StreamersExportTest(unittest.TestCase):
             self.assertEqual(sheet.column_dimensions["I"].width, 14)
             self.assertEqual(sheet.column_dimensions["J"].width, 15)
             self.assertEqual(sheet.column_dimensions["K"].width, 14)
+
+    def test_write_streamers_xlsx_filters_period_columns(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            miner = self._make_miner(os.path.join(tmp_dir, "streamers.xlsx"))
+            rows = [
+                {
+                    "Streamer": "demo",
+                    "Points": "1.20k",
+                    "Followdate": "21.07.2025",
+                    "Last Stream": "04.03.2026",
+                    "Sub": "no",
+                    "Banned": "no",
+                    "Watchstreaks": 0,
+                    "Daily Points": 1,
+                    "Weekly Points": 2,
+                    "Monthly Points": 3,
+                    "Yearly Points": 4,
+                }
+            ]
+
+            weekly_path = os.path.join(tmp_dir, "weekly.xlsx")
+            monthly_path = os.path.join(tmp_dir, "monthly.xlsx")
+            yearly_path = os.path.join(tmp_dir, "yearly.xlsx")
+
+            miner._write_streamers_xlsx(rows, weekly_path, period="weekly")
+            miner._write_streamers_xlsx(rows, monthly_path, period="monthly")
+            miner._write_streamers_xlsx(rows, yearly_path, period="yearly")
+
+            weekly_headers = [
+                cell.value for cell in load_workbook(weekly_path).active[1]
+            ]
+            monthly_headers = [
+                cell.value for cell in load_workbook(monthly_path).active[1]
+            ]
+            yearly_headers = [
+                cell.value for cell in load_workbook(yearly_path).active[1]
+            ]
+
+            self.assertNotIn("Daily Points", weekly_headers)
+            self.assertEqual(
+                weekly_headers[-3:],
+                ["Weekly Points", "Monthly Points", "Yearly Points"],
+            )
+            self.assertEqual(monthly_headers[-2:], ["Monthly Points", "Yearly Points"])
+            self.assertEqual(yearly_headers[-1:], ["Yearly Points"])
 
     def test_write_streamers_xlsx_rolls_to_new_date_file(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

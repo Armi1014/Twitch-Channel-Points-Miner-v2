@@ -13,6 +13,7 @@ from TwitchChannelPointsMiner.classes.entities.Raid import Raid
 from TwitchChannelPointsMiner.utils import get_streamer_index
 
 logger = logging.getLogger(__name__)
+USER_NOTIFICATION_TOPICS = {"user-subscribe-events-v1", "onsite-notifications"}
 
 
 class MessageListener(abc.ABC):
@@ -35,11 +36,38 @@ class PubSubHandler(MessageListener):
 
     def on_message(self, message: Message):
         streamer_index = get_streamer_index(self.streamers, message.channel_id)
-        if streamer_index == -1:
+        if streamer_index == -1 and message.topic not in USER_NOTIFICATION_TOPICS:
             return
 
         try:
-            if message.topic == "community-points-user-v1":
+            if message.topic == "user-subscribe-events-v1":
+                notification = message.message.get("notification", {})
+                pubsub = (
+                    notification.get("pubsub")
+                    if isinstance(notification, dict)
+                    else None
+                )
+                channel_id = (
+                    pubsub.get("channel_id") if isinstance(pubsub, dict) else None
+                )
+                if channel_id:
+                    self.twitch.notify_gift_sub_from_channel_id(
+                        channel_id,
+                        self.streamers,
+                    )
+
+            elif message.topic == "onsite-notifications":
+                if message.type == "create-notification" and isinstance(
+                    message.data,
+                    dict,
+                ):
+                    notification = message.data.get("notification")
+                    self.twitch.notify_gift_sub_from_onsite_notification(
+                        notification,
+                        self.streamers,
+                    )
+
+            elif message.topic == "community-points-user-v1":
                 if message.type in ["points-earned", "points-spent"]:
                     balance = message.data["balance"]["balance"]
                     self.streamers[streamer_index].channel_points = balance

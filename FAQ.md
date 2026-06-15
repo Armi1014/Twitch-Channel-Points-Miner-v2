@@ -44,9 +44,15 @@ Pending watch streaks still bypass the limit so streak rewards are not missed.
 
 They are still checked. The miner can probe already-online channels for watch streak state, so startup does not skip them.
 
-### Why is someone missing in `watch_streak_cache.<account>.json`?
+### Why is someone missing in `.state/watch_streak_cache.<account>.json`?
 
 That file is not a full streamer list. Entries appear when the miner creates or updates watch streak state for that streamer.
+
+### What do the watch streak limits mean?
+
+`MAX_STREAK_ATTEMPTS_PER_BROADCAST = 2` means the miner retries a streamer's current broadcast at most twice before giving up for that broadcast.
+
+`WATCH_STREAK_MAX_PARALLEL = 2` means at most two streak attempts are watched at the same time. Values above `2` are currently capped by Twitch's two-stream watch limit.
 
 ### Where do `Watchstreaks` values come from?
 
@@ -70,7 +76,13 @@ Usually one of these:
 
 By default, the report is written to:
 
-`logs/report_YYYY-MM-DD_<account>.xlsx`
+`logs/reports/daily/report_YYYY-MM-DD_<account>.xlsx`
+
+When enabled, the other period reports are written to:
+
+- `logs/reports/weekly/weekly_report_YYYY-Www_<account>.xlsx`
+- `logs/reports/monthly/monthly_report_Month_YYYY_<account>.xlsx`
+- `logs/reports/yearly/yearly_report_YYYY_<account>.xlsx`
 
 ### What do the main export columns mean?
 
@@ -83,10 +95,12 @@ By default, the report is written to:
 
 Not on the same day. The miner stores the daily baseline in:
 
-`logs/daily_points_baseline.<account>.json`
+`logs/.state/daily_points_baseline.<account>.json`
 
 That lets the report keep counting forward across same-day restarts.
-After updating from an older build, the first export rewrites that file into the new format, and then same-day restart carry-forward works from that point on.
+After updating from an older build, the miner copies the legacy file from `logs/` into `logs/.state/` if the hidden state file is missing. Future saves go to `logs/.state/`, and old files are left in place for backup safety.
+
+Do not delete files in `logs/.state/` unless you intentionally want to reset local report and watch-streak state.
 
 ### When does `Points gained` reset to `0`?
 

@@ -40,6 +40,13 @@ from TwitchChannelPointsMiner.classes.Settings import (
     Priority,
     Settings,
 )
+from TwitchChannelPointsMiner.classes.SubscriptionNotifications import (
+    build_subscription_dedupe_key,
+    build_subscription_message,
+    format_channel_points,
+    format_sub_plan,
+    should_emit_subscription_notification,
+)
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.constants import (
     CLIENT_ID,
@@ -135,6 +142,7 @@ class Twitch(object):
         "_streak_rotation_cursor",
         "_client_version_checked_at",
         "_last_client_version_error_log",
+        "subscription_notification_cache_path",
     ]
 
     def __init__(self, username, user_agent, password=None, watch_streak_max_parallel=None):
@@ -187,6 +195,7 @@ class Twitch(object):
         self._streak_rotation_cursor = 0
         self._client_version_checked_at = 0.0
         self._last_client_version_error_log = 0.0
+        self.subscription_notification_cache_path = None
 
     def login(self):
         if not os.path.isfile(self.cookies_file):
@@ -526,6 +535,227 @@ class Twitch(object):
         if not isinstance(data, dict) or "chatRoomBanStatus" not in data:
             return None
         return self._is_chat_banned(data.get("chatRoomBanStatus"))
+
+    def get_gift_subscription_benefits(
+        self,
+        limit: int = 100,
+        max_pages: int = 5,
+    ) -> list[dict]:
+        benefits: list[dict] = []
+        cursor = ""
+        for _ in range(max(1, int(max_pages))):
+            json_data = copy.deepcopy(
+                GQLOperations.SubscriptionsManagement_SubscriptionBenefits
+            )
+            json_data["variables"] = {
+                "cursor": cursor,
+                "filter": "GIFT",
+                "limit": max(1, int(limit)),
+                "platform": "WEB",
+            }
+            response = self.post_gql_request(json_data)
+            if self._log_gql_errors(json_data.get("operationName"), response):
+                return benefits
+            subscription_benefits = (
+                response.get("data", {})
+                .get("currentUser", {})
+                .get("subscriptionBenefits", {})
+                if isinstance(response, dict)
+                else {}
+            )
+            edges = subscription_benefits.get("edges") or []
+            if not isinstance(edges, list):
+                return benefits
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                node = edge.get("node")
+                if not isinstance(node, dict):
+                    continue
+                gift = node.get("gift")
+                if isinstance(gift, dict) and gift.get("isGift") is True:
+                    benefits.append(node)
+
+            page_info = subscription_benefits.get("pageInfo") or {}
+            if not isinstance(page_info, dict) or page_info.get("hasNextPage") is not True:
+                break
+            cursor = ""
+            if edges and isinstance(edges[-1], dict):
+                cursor = edges[-1].get("cursor") or ""
+            if not cursor:
+                break
+        return benefits
+
+    def _streamer_for_subscription(
+        self,
+        channel_id: str | None,
+        channel_login: str | None,
+        streamers,
+    ):
+        normalized_channel_id = str(channel_id) if channel_id not in [None, ""] else None
+        normalized_login = (
+            str(channel_login).lower() if channel_login not in [None, ""] else None
+        )
+        for streamer in streamers or []:
+            if (
+                normalized_channel_id
+                and str(getattr(streamer, "channel_id", "")) == normalized_channel_id
+            ):
+                return streamer
+            if normalized_login and getattr(streamer, "username", "") == normalized_login:
+                return streamer
+        return None
+
+    def _subscription_benefit_channel(
+        self,
+        benefit: dict,
+    ) -> tuple[str | None, str | None, str | None]:
+        user = benefit.get("user") if isinstance(benefit, dict) else None
+        product = benefit.get("product") if isinstance(benefit, dict) else None
+        if not isinstance(user, dict):
+            user = {}
+        if not isinstance(product, dict):
+            product = {}
+        channel_id = user.get("id")
+        if channel_id in [None, ""]:
+            channel = user.get("channel")
+            if isinstance(channel, dict):
+                channel_id = channel.get("id")
+        channel_login = user.get("login") or product.get("name")
+        display_name = user.get("displayName") or product.get("displayName") or channel_login
+        return (
+            str(channel_id) if channel_id not in [None, ""] else None,
+            str(channel_login).lower() if channel_login not in [None, ""] else None,
+            str(display_name) if display_name not in [None, ""] else None,
+        )
+
+    def find_gift_subscription_benefit(
+        self,
+        *,
+        channel_id: str | None = None,
+        channel_login: str | None = None,
+    ) -> dict | None:
+        normalized_channel_id = str(channel_id) if channel_id not in [None, ""] else None
+        normalized_login = (
+            str(channel_login).lower() if channel_login not in [None, ""] else None
+        )
+        for benefit in self.get_gift_subscription_benefits():
+            benefit_channel_id, benefit_login, _ = self._subscription_benefit_channel(
+                benefit
+            )
+            if normalized_channel_id and benefit_channel_id == normalized_channel_id:
+                return benefit
+            if normalized_login and benefit_login == normalized_login:
+                return benefit
+        return None
+
+    def _emit_gift_subscription_benefit(self, benefit: dict, streamers) -> bool:
+        channel_id, channel_login, display_name = self._subscription_benefit_channel(benefit)
+        streamer = self._streamer_for_subscription(channel_id, channel_login, streamers)
+        channel = (
+            getattr(streamer, "username", None)
+            or channel_login
+            or display_name
+            or "Unknown"
+        )
+        points_label = (
+            format_channel_points(getattr(streamer, "channel_points", None))
+            if streamer is not None
+            else "Unknown"
+        )
+        gift = benefit.get("gift") if isinstance(benefit, dict) else None
+        gifter_data = gift.get("gifter") if isinstance(gift, dict) else None
+        if isinstance(gifter_data, dict) and gifter_data:
+            gifter = (
+                gifter_data.get("displayName")
+                or gifter_data.get("login")
+                or "Unknown"
+            )
+            msg_id = "subgift"
+        else:
+            gifter = "Anonymous"
+            msg_id = "anonsubgift"
+
+        product = benefit.get("product") if isinstance(benefit, dict) else None
+        if not isinstance(product, dict):
+            product = {}
+        tier = benefit.get("tier") or product.get("tier")
+        plan = format_sub_plan(tier)
+        message = build_subscription_message(
+            msg_id=msg_id,
+            channel=str(channel),
+            points_label=points_label,
+            recipient=self.account_username,
+            gifter=str(gifter),
+            plan=plan,
+        )
+        if message is None:
+            return False
+        dedupe_key = build_subscription_dedupe_key(
+            msg_id=msg_id,
+            channel=str(channel),
+            recipient=self.account_username,
+            gifter=str(gifter),
+            plan=plan,
+        )
+        if not should_emit_subscription_notification(
+            self.subscription_notification_cache_path,
+            message,
+            dedupe_key=dedupe_key,
+        ):
+            return False
+        if streamer is not None:
+            streamer.subscription_tier = tier or streamer.subscription_tier or 1
+        logger.info(
+            message,
+            extra={"emoji": ":partying_face:", "event": Events.SUBSCRIPTION},
+        )
+        return True
+
+    def notify_gift_sub_from_channel_id(
+        self,
+        channel_id: str | None,
+        streamers,
+        channel_login: str | None = None,
+    ) -> bool:
+        benefit = self.find_gift_subscription_benefit(
+            channel_id=channel_id,
+            channel_login=channel_login,
+        )
+        if benefit is None:
+            return False
+        return self._emit_gift_subscription_benefit(benefit, streamers)
+
+    def _channel_login_from_notification_action(self, notification: dict) -> str | None:
+        actions = notification.get("actions") if isinstance(notification, dict) else None
+        if not isinstance(actions, list):
+            return None
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            url = action.get("url")
+            if not url:
+                continue
+            parsed = urlparse(str(url))
+            path_parts = [part for part in parsed.path.split("/") if part]
+            if path_parts:
+                return path_parts[-1].lower()
+        return None
+
+    def notify_gift_sub_from_onsite_notification(self, notification: dict, streamers) -> bool:
+        if not isinstance(notification, dict):
+            return False
+        if notification.get("type") != "sub_gift_received":
+            return False
+        if notification.get("category") not in [None, "gift_subscriptions"]:
+            return False
+        channel_id = notification.get("mobile_destination_key")
+        channel_login = self._channel_login_from_notification_action(notification)
+        return self.notify_gift_sub_from_channel_id(
+            channel_id,
+            streamers,
+            channel_login=channel_login,
+        )
 
     def get_followers(
         self, limit: int = 100, order: FollowersOrder = FollowersOrder.ASC
@@ -1083,6 +1313,23 @@ class Twitch(object):
         for error in errors:
             message = error.get("message") if isinstance(error, dict) else str(error)
             if isinstance(message, str) and "service timeout" in message.lower():
+                return True
+        return False
+
+    def _has_persisted_query_not_found(self, response):
+        if not isinstance(response, dict):
+            return False
+        errors = response.get("errors") or []
+        for error in errors:
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            code = (
+                (error.get("extensions") or {}).get("code")
+                if isinstance(error, dict)
+                else None
+            )
+            if "PersistedQueryNotFound" in str(message) or "PersistedQueryNotFound" in str(
+                code
+            ):
                 return True
         return False
 
@@ -1920,21 +2167,12 @@ class Twitch(object):
                 self._watch_reward_counter(streamer_obj) - attempt.watch_counter_at_start
             )
             if watch_rewards_gained >= self.streak_watch_events_target:
-                # 2 WATCH rewards is a more reliable indicator than local watch-time estimates.
-                streamer_obj.stream.watch_streak_missing = False
-                self.watch_streak_cache.mark_ended(
-                    attempt.streamer,
-                    attempt.broadcast_id,
-                    ended_at=now,
-                    account_name=self.account_username,
-                )
                 logger.debug(
-                    "[streak] %s inferred as completed after %d WATCH events for broadcast %s",
+                    "[streak] %s has %d WATCH events for broadcast %s; waiting for WATCH_STREAK evidence",
                     attempt.streamer,
                     watch_rewards_gained,
                     attempt.broadcast_id,
                 )
-                continue
 
             elapsed = now - attempt.started_at
             if elapsed < self.streak_attempt_timeout_seconds:
@@ -2053,9 +2291,8 @@ class Twitch(object):
                         self.check_streamer_online(streamers[index])
 
                 """
-                Normally we respect the 2-stream limit, but if any watch-streaks are pending
-                we temporarily fan out (optionally capped by watch_streak_max_parallel)
-                so each live streamer gets a shot.
+                Streak attempts are selected first, capped by the miner's two-stream
+                watch limit and the optional watch_streak_max_parallel value.
                 """
                 self._refresh_selection_context(streamers, streamers_index, priority)
                 streamers_watching = self._select_streamers_to_watch(
@@ -2408,6 +2645,12 @@ class Twitch(object):
             GQLOperations.DropsHighlightService_AvailableDrops)
         json_data["variables"] = {"channelID": streamer.channel_id}
         response = self.post_gql_request(json_data)
+        if self._has_persisted_query_not_found(response):
+            logger.debug(
+                "Drops campaign highlight query is unavailable for %s; falling back to dashboard campaigns",
+                streamer.username,
+            )
+            return []
         if self._log_gql_errors(json_data.get("operationName"), response):
             return []
         channel = (
@@ -2576,12 +2819,48 @@ class Twitch(object):
                     time.sleep(random.uniform(5, 10))
 
     def __streamers_require_campaign_sync(self, streamers):
-        # Run drop sync whenever at least one online streamer has drops enabled,
-        # even if campaign details are not yet loaded (avoid chicken-and-egg).
+        # Inventory claiming must keep running even when campaign discovery is flaky
+        # or no configured streamer is currently online.
         return any(
-            streamer.settings.claim_drops is True and streamer.is_online is True
+            streamer.settings.claim_drops is True
             for streamer in streamers
         )
+
+    @staticmethod
+    def _game_value(game, key):
+        return game.get(key) if isinstance(game, dict) else None
+
+    def _games_match(self, campaign_game, stream_game) -> bool:
+        campaign_id = self._game_value(campaign_game, "id")
+        stream_id = self._game_value(stream_game, "id")
+        if campaign_id and stream_id:
+            return str(campaign_id) == str(stream_id)
+
+        campaign_name = self._game_value(campaign_game, "displayName")
+        stream_name = self._game_value(stream_game, "displayName")
+        if campaign_name and stream_name:
+            return str(campaign_name).casefold() == str(stream_name).casefold()
+
+        return campaign_game == stream_game
+
+    def _campaign_matches_streamer(self, campaign, streamer) -> bool:
+        if getattr(campaign, "drops", []) == []:
+            return False
+        if not self._games_match(
+            getattr(campaign, "game", {}),
+            getattr(streamer.stream, "game", {}),
+        ):
+            return False
+        campaign_ids = getattr(streamer.stream, "campaigns_ids", []) or []
+        if campaign_ids:
+            return campaign.id in campaign_ids
+        campaign_channels = getattr(campaign, "channels", []) or []
+        if campaign_channels:
+            campaign_channel_ids = {
+                str(channel_id) for channel_id in campaign_channels
+            }
+            return str(streamer.channel_id) in campaign_channel_ids
+        return True
 
     def sync_campaigns(self, streamers, chunk_size=3):
         campaigns_update = 0
@@ -2630,20 +2909,20 @@ class Twitch(object):
                 # Divide et impera :)
                 campaigns = self.__sync_campaigns(campaigns)
 
-                # Check if user It's currently streaming the same game present in campaigns_details
+                # Check if user is currently streaming the same game present in campaigns_details.
+                # If highlighted campaign ids are unavailable, fall back to game/channel matching.
                 for i in range(0, len(streamers)):
-                    if streamers[i].drops_condition() is True:
-                        # yes! The streamer[i] have the drops_tags enabled and we It's currently stream a game with campaign active!
-                        # With 'campaigns_ids' we are also sure that this streamer have the campaign active.
-                        # yes! The streamer[index] have the drops_tags enabled and we It's currently stream a game with campaign active!
-                        streamers[i].stream.campaigns = list(
-                            filter(
-                                lambda x: x.drops != []
-                                and x.game == streamers[i].stream.game
-                                and x.id in streamers[i].stream.campaigns_ids,
-                                campaigns,
-                            )
-                        )
+                    if (
+                        streamers[i].settings.claim_drops is not True
+                        or streamers[i].is_online is not True
+                    ):
+                        streamers[i].stream.campaigns = []
+                        continue
+                    streamers[i].stream.campaigns = [
+                        campaign
+                        for campaign in campaigns
+                        if self._campaign_matches_streamer(campaign, streamers[i])
+                    ]
 
             except (ValueError, KeyError, requests.exceptions.ConnectionError) as e:
                 logger.error(f"Error while syncing inventory: {e}")

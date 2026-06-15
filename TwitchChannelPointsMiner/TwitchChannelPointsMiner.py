@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import signal
+import shutil
 import sys
 import threading
 import time
@@ -82,6 +83,36 @@ REPORT_POINT_COLUMNS = {
     "monthly": "Monthly Points",
     "yearly": "Yearly Points",
 }
+REPORT_METADATA_COLUMNS = [
+    "Streamer",
+    "Points",
+    "Followdate",
+    "Last Stream",
+    "Sub",
+    "Banned",
+    "Watchstreaks",
+]
+REPORT_COLUMNS_BY_PERIOD = {
+    "daily": REPORT_METADATA_COLUMNS
+    + [
+        REPORT_POINT_COLUMNS["daily"],
+        REPORT_POINT_COLUMNS["weekly"],
+        REPORT_POINT_COLUMNS["monthly"],
+        REPORT_POINT_COLUMNS["yearly"],
+    ],
+    "weekly": REPORT_METADATA_COLUMNS
+    + [
+        REPORT_POINT_COLUMNS["weekly"],
+        REPORT_POINT_COLUMNS["monthly"],
+        REPORT_POINT_COLUMNS["yearly"],
+    ],
+    "monthly": REPORT_METADATA_COLUMNS
+    + [
+        REPORT_POINT_COLUMNS["monthly"],
+        REPORT_POINT_COLUMNS["yearly"],
+    ],
+    "yearly": REPORT_METADATA_COLUMNS + [REPORT_POINT_COLUMNS["yearly"]],
+}
 
 
 class TwitchChannelPointsMiner:
@@ -118,6 +149,7 @@ class TwitchChannelPointsMiner:
         "yearly_reports",
         "streamer_follow_dates",
         "daily_points_baseline_path",
+        "subscription_notification_cache_path",
         "daily_points_day_key",
         "daily_points_baseline",
         "daily_points_snapshot",
@@ -222,11 +254,14 @@ class TwitchChannelPointsMiner:
             for ch in self.username.lower()
         )
         self.watch_streak_cache_path = os.path.join(
-            "logs", f"watch_streak_cache.{safe_account_name}.json"
+            "logs", ".state", f"watch_streak_cache.{safe_account_name}.json"
         )
         report_date = datetime.now().strftime("%Y-%m-%d")
         self.streamers_export_path = os.path.join(
-            "logs", f"report_{report_date}_{safe_account_name}.xlsx"
+            "logs",
+            "reports",
+            "daily",
+            f"report_{report_date}_{safe_account_name}.xlsx",
         )
         self.streamers_export_thread = None
         self.streamers_export_interval_seconds = 10 * 60
@@ -236,7 +271,10 @@ class TwitchChannelPointsMiner:
         self.yearly_reports = bool(yearly_reports)
         self.streamer_follow_dates = {}
         self.daily_points_baseline_path = os.path.join(
-            "logs", f"daily_points_baseline.{safe_account_name}.json"
+            "logs", ".state", f"daily_points_baseline.{safe_account_name}.json"
+        )
+        self.subscription_notification_cache_path = os.path.join(
+            "logs", ".state", f"subscription_notifications.{safe_account_name}.json"
         )
         self.daily_points_day_key = datetime.now().strftime("%Y-%m-%d")
         self.daily_points_baseline = {}
@@ -251,17 +289,7 @@ class TwitchChannelPointsMiner:
         self._watch_streak_days_lookup_attempted = set()
         self._chat_ban_lookup_attempted = set()
         self._load_daily_points_baseline()
-        legacy_watch_streak_cache_path = os.path.join("logs", "watch_streak_cache.json")
-        initial_cache_load_path = self.watch_streak_cache_path
-        if (
-            os.path.isfile(self.watch_streak_cache_path) is False
-            and os.path.isfile(legacy_watch_streak_cache_path) is True
-        ):
-            initial_cache_load_path = legacy_watch_streak_cache_path
-            logger.info(
-                "Using legacy watch streak cache file for this startup: %s",
-                legacy_watch_streak_cache_path,
-            )
+        initial_cache_load_path = self._watch_streak_cache_load_path()
         self.watch_streak_cache = WatchStreakCache.load_from_disk(
             initial_cache_load_path,
             default_account_name=self.username,
@@ -269,6 +297,9 @@ class TwitchChannelPointsMiner:
             min_offline_for_new_streak=self.watch_streak_min_offline_seconds,
         )
         self.twitch.watch_streak_cache = self.watch_streak_cache
+        self.twitch.subscription_notification_cache_path = (
+            self.subscription_notification_cache_path
+        )
         if priority is None:
             self.priority = [Priority.STREAK, Priority.DROPS, Priority.ORDER]
         elif isinstance(priority, Priority):
@@ -366,6 +397,67 @@ class TwitchChannelPointsMiner:
             for ch in self.username.lower()
         )
 
+    def _legacy_state_path_for(self, path: str) -> str:
+        state_dir = os.path.dirname(path)
+        if os.path.basename(state_dir) == ".state":
+            return os.path.join(os.path.dirname(state_dir), os.path.basename(path))
+        return path
+
+    def _first_existing_path(
+        self,
+        preferred_path: str,
+        legacy_paths: list[str],
+        label: str,
+    ) -> str:
+        if os.path.isfile(preferred_path):
+            return preferred_path
+        for legacy_path in legacy_paths:
+            if legacy_path != preferred_path and os.path.isfile(legacy_path):
+                try:
+                    Path(os.path.dirname(preferred_path) or ".").mkdir(
+                        parents=True,
+                        exist_ok=True,
+                    )
+                    shutil.copy2(legacy_path, preferred_path)
+                    logger.info(
+                        "Copied legacy %s file to %s; kept original at %s",
+                        label,
+                        preferred_path,
+                        legacy_path,
+                    )
+                    return preferred_path
+                except Exception:
+                    logger.warning(
+                        "Failed to copy legacy %s file to %s; using %s for this startup",
+                        label,
+                        preferred_path,
+                        legacy_path,
+                    )
+                    return legacy_path
+        return preferred_path
+
+    def _watch_streak_cache_load_path(self) -> str:
+        safe_account_name = self._safe_account_name()
+        return self._first_existing_path(
+            self.watch_streak_cache_path,
+            [
+                self._legacy_state_path_for(self.watch_streak_cache_path),
+                os.path.join("logs", "watch_streak_cache.json"),
+                os.path.join("logs", f"watch_streak_cache.{safe_account_name}.json"),
+            ],
+            "watch streak cache",
+        )
+
+    def _daily_points_baseline_load_path(self) -> str | None:
+        path = getattr(self, "daily_points_baseline_path", None)
+        if not path:
+            return path
+        return self._first_existing_path(
+            path,
+            [self._legacy_state_path_for(path)],
+            "daily points baseline",
+        )
+
     def _uses_dated_streamers_export_path(self) -> bool:
         file_name = os.path.basename(self.streamers_export_path or "")
         return file_name.startswith("report_") and file_name.endswith(
@@ -379,11 +471,20 @@ class TwitchChannelPointsMiner:
             output_dir, f"report_{report_date}_{self._safe_account_name()}.xlsx"
         )
 
-    def _report_output_dir(self) -> str:
-        return os.path.dirname(self.streamers_export_path) or "logs"
+    def _report_output_dir(self, period: str) -> str:
+        output_dir = os.path.dirname(self.streamers_export_path) or os.path.join(
+            "logs", "reports", "daily"
+        )
+        reports_root = os.path.dirname(output_dir)
+        if (
+            os.path.basename(output_dir) == "daily"
+            and os.path.basename(reports_root) == "reports"
+        ):
+            return os.path.join(reports_root, period)
+        return output_dir
 
     def _period_report_path(self, period: str) -> str:
-        output_dir = self._report_output_dir()
+        output_dir = self._report_output_dir(period)
         account_name = self._safe_account_name()
         now = datetime.now()
         if period == "daily":
@@ -414,6 +515,19 @@ class TwitchChannelPointsMiner:
         }
         return [
             self._period_report_path(period)
+            for period in REPORT_PERIODS
+            if enabled.get(period)
+        ]
+
+    def _enabled_report_targets(self) -> list[tuple[str, str]]:
+        enabled = {
+            "daily": self.daily_reports,
+            "weekly": self.weekly_reports,
+            "monthly": self.monthly_reports,
+            "yearly": self.yearly_reports,
+        }
+        return [
+            (period, self._period_report_path(period))
             for period in REPORT_PERIODS
             if enabled.get(period)
         ]
@@ -516,7 +630,7 @@ class TwitchChannelPointsMiner:
         self._ensure_period_points_state()
 
     def _load_daily_points_baseline(self) -> None:
-        path = getattr(self, "daily_points_baseline_path", None)
+        path = self._daily_points_baseline_load_path()
         self.period_points_baseline = {period: {} for period in REPORT_PERIODS}
         self.period_points_snapshot = {period: {} for period in REPORT_PERIODS}
         self.period_points_session_anchor = {period: {} for period in REPORT_PERIODS}
@@ -818,6 +932,7 @@ class TwitchChannelPointsMiner:
         self,
         rows: list[dict[str, str]],
         output_path: str | None = None,
+        period: str = "daily",
     ) -> None:
         if output_path is None:
             self._refresh_streamers_export_path_if_needed()
@@ -825,21 +940,13 @@ class TwitchChannelPointsMiner:
         output_dir = os.path.dirname(output_path) or "."
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+        columns = REPORT_COLUMNS_BY_PERIOD.get(period)
+        if columns is None:
+            raise ValueError(f"Unknown report period: {period}")
+
         data_frame = pd.DataFrame(
             rows,
-            columns=[
-                "Streamer",
-                "Points",
-                "Followdate",
-                "Last Stream",
-                "Sub",
-                "Banned",
-                "Watchstreaks",
-                "Daily Points",
-                "Weekly Points",
-                "Monthly Points",
-                "Yearly Points",
-            ],
+            columns=columns,
         )
 
         tmp_fd, tmp_path = tempfile.mkstemp(
@@ -1007,13 +1114,13 @@ class TwitchChannelPointsMiner:
                 sheet.column_dimensions[get_column_letter(col_idx)].width = width
 
     def _export_streamers_snapshot(self) -> None:
-        report_paths = self._enabled_report_paths()
-        if not report_paths:
+        report_targets = self._enabled_report_targets()
+        if not report_targets:
             return
         try:
             rows = self._build_streamer_export_rows()
-            for report_path in report_paths:
-                self._write_streamers_xlsx(rows, report_path)
+            for period, report_path in report_targets:
+                self._write_streamers_xlsx(rows, report_path, period=period)
         except Exception as exc:
             logger.warning(
                 "Failed to update streamers export: %s",
@@ -1094,12 +1201,15 @@ class TwitchChannelPointsMiner:
                 self.twitch.claim_all_drops_from_inventory()
 
             self.watch_streak_cache = WatchStreakCache.load_from_disk(
-                self.watch_streak_cache_path,
+                self._watch_streak_cache_load_path(),
                 default_account_name=self.username,
                 account_filter=self.username,
                 min_offline_for_new_streak=self.watch_streak_min_offline_seconds,
             )
             self.twitch.watch_streak_cache = self.watch_streak_cache
+            self.twitch.subscription_notification_cache_path = (
+                self.subscription_notification_cache_path
+            )
 
             def normalize_login(name: str) -> str:
                 return name.lower().strip().replace(" ", "")
@@ -1161,6 +1271,9 @@ class TwitchChannelPointsMiner:
                 streamer.watch_streak_cache = self.watch_streak_cache
                 streamer.watch_streak_cache_path = self.watch_streak_cache_path
                 streamer.watch_streak_account = self.username
+                streamer.subscription_notification_cache_path = (
+                    self.subscription_notification_cache_path
+                )
                 return streamer
 
             streamers_loaded = [None] * len(streamers_name)
@@ -1288,6 +1401,18 @@ class TwitchChannelPointsMiner:
             self.ws_pool.submit(
                 PubsubTopic(
                     "community-points-user-v1",
+                    user_id=user_id,
+                )
+            )
+            self.ws_pool.submit(
+                PubsubTopic(
+                    "user-subscribe-events-v1",
+                    user_id=user_id,
+                )
+            )
+            self.ws_pool.submit(
+                PubsubTopic(
+                    "onsite-notifications",
                     user_id=user_id,
                 )
             )

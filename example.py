@@ -120,7 +120,7 @@ PRIORITY_ORDER = [
     Priority.ORDER,     # Then follow the order from STREAMERS above
 ]
 
-WATCH_STREAK_MAX_PARALLEL = 2
+WATCH_STREAK_MAX_PARALLEL = 2  # max simultaneous streak attempts; capped by Twitch's 2-stream watch limit
 WATCH_STREAK_OFFLINE_WAIT_SECONDS = 30 * 60  # 0 = more aggressive checking
 
 # ---------------------------------------------------------------------------
@@ -208,12 +208,13 @@ twitch_miner = TwitchChannelPointsMiner(
 )
 
 # Useful files written under logs/:
-# - report_YYYY-MM-DD_<account>.xlsx
-# - weekly_report_YYYY-Www_<account>.xlsx, when WEEKLY_REPORTS=True
-# - monthly_report_Month_YYYY_<account>.xlsx, when MONTHLY_REPORTS=True
-# - yearly_report_YYYY_<account>.xlsx, when YEARLY_REPORTS=True
-# - watch_streak_cache.<account>.json
-# - daily_points_baseline.<account>.json
+# - reports/daily/report_YYYY-MM-DD_<account>.xlsx
+# - reports/weekly/weekly_report_YYYY-Www_<account>.xlsx, when WEEKLY_REPORTS=True
+# - reports/monthly/monthly_report_Month_YYYY_<account>.xlsx, when MONTHLY_REPORTS=True
+# - reports/yearly/yearly_report_YYYY_<account>.xlsx, when YEARLY_REPORTS=True
+# - .state/watch_streak_cache.<account>.json
+# - .state/daily_points_baseline.<account>.json
+# - .state/subscription_notifications.<account>.json
 #
 # Optional notifications:
 # Keep these disabled until you have real credentials. Matrix logs in during

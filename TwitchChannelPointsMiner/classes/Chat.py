@@ -7,7 +7,14 @@ from irc.bot import SingleServerIRCBot
 
 from TwitchChannelPointsMiner.constants import IRC, IRC_PORT
 from TwitchChannelPointsMiner.classes.Settings import Events, Settings
-from TwitchChannelPointsMiner.utils import _millify
+from TwitchChannelPointsMiner.classes.SubscriptionNotifications import (
+    build_detail_message,
+    build_subscription_dedupe_key,
+    build_subscription_message,
+    format_channel_points,
+    format_sub_plan,
+    should_emit_subscription_notification,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +64,7 @@ class ClientIRC(SingleServerIRCBot):
 
     @staticmethod
     def _format_sub_plan(plan_code):
-        plans = {
-            "Prime": "Prime",
-            "1000": "Tier 1",
-            "2000": "Tier 2",
-            "3000": "Tier 3",
-        }
-        if not plan_code:
-            return "Unknown"
-        return plans.get(str(plan_code), str(plan_code))
+        return format_sub_plan(plan_code)
 
     def _format_streamer_label(self):
         if hasattr(self.streamer, "username"):
@@ -74,17 +73,12 @@ class ClientIRC(SingleServerIRCBot):
 
     def _format_points_label(self):
         if hasattr(self.streamer, "channel_points"):
-            return f"{_millify(self.streamer.channel_points)} points"
+            return format_channel_points(self.streamer.channel_points)
         return "Unknown"
 
     @staticmethod
     def _build_detail_message(title, details):
-        lines = [
-            f"**{title}**",
-            "",
-            *details,
-        ]
-        return "\n".join(lines)
+        return build_detail_message(title, details)
 
     def _targets_current_user(self, msg_id, tags):
         current_user = self._normalize_user(getattr(self, "_nickname", None))
@@ -117,7 +111,7 @@ class ClientIRC(SingleServerIRCBot):
             if candidate
         )
 
-    def _build_subscription_message(self, event):
+    def _subscription_context_from_event(self, event):
         tags = self._tags_to_dict(event.tags)
         msg_id = tags.get("msg-id")
         if msg_id is None:
@@ -149,55 +143,28 @@ class ClientIRC(SingleServerIRCBot):
         months = tags.get("msg-param-cumulative-months")
         plan = self._format_sub_plan(tags.get("msg-param-sub-plan"))
 
-        if msg_id == "sub":
-            return self._build_detail_message(
-                "New Subscription",
-                [
-                    f"**Channel:** `{channel}` (`{points}`)",
-                    f"**Subscriber:** **{subscriber}**",
-                    f"**Tier:** `{plan}`",
-                ],
-            )
-        elif msg_id == "resub":
-            details = [
-                f"**Channel:** `{channel}` (`{points}`)",
-                f"**Subscriber:** **{subscriber}**",
-                f"**Tier:** `{plan}`",
-            ]
-            if months:
-                details.append(f"**Months:** `{months}`")
-            return self._build_detail_message(
-                "Subscription Renewed",
-                details,
-            )
-        elif msg_id in ["subgift", "anonsubgift"]:
-            return self._build_detail_message(
-                "Received Subgift",
-                [
-                    f"**Channel:** `{channel}` (`{points}`)",
-                    f"**Recipient:** **{recipient}**",
-                    f"**From:** **{gifter}**",
-                    f"**Tier:** `{plan}`",
-                ],
-            )
-        elif msg_id in ["giftpaidupgrade", "anongiftpaidupgrade"]:
-            return self._build_detail_message(
-                "Gift Subscription Upgraded",
-                [
-                    f"**Channel:** `{channel}` (`{points}`)",
-                    f"**Subscriber:** **{subscriber}**",
-                ],
-            )
-        elif msg_id == "primepaidupgrade":
-            return self._build_detail_message(
-                "Prime Subscription Upgraded",
-                [
-                    f"**Channel:** `{channel}` (`{points}`)",
-                    f"**Subscriber:** **{subscriber}**",
-                ],
-            )
-        else:
+        return {
+            "msg_id": msg_id,
+            "channel": channel,
+            "points_label": points,
+            "subscriber": subscriber,
+            "recipient": recipient,
+            "gifter": gifter,
+            "plan": plan,
+            "months": months,
+        }
+
+    def _build_subscription_message(self, event):
+        context = self._subscription_context_from_event(event)
+        if context is None:
             return None
+        return build_subscription_message(**context)
+
+    def _build_subscription_dedupe_key(self, event):
+        context = self._subscription_context_from_event(event)
+        if context is None:
+            return None
+        return build_subscription_dedupe_key(**context)
 
     def start(self):
         self.__active = True
@@ -250,6 +217,16 @@ class ClientIRC(SingleServerIRCBot):
     def on_usernotice(self, connection, event):
         message = self._build_subscription_message(event)
         if message is not None:
+            cache_path = getattr(
+                self.streamer, "subscription_notification_cache_path", None
+            )
+            dedupe_key = self._build_subscription_dedupe_key(event)
+            if not should_emit_subscription_notification(
+                cache_path,
+                message,
+                dedupe_key=dedupe_key,
+            ):
+                return
             logger.info(
                 message,
                 extra={"emoji": ":partying_face:", "event": Events.SUBSCRIPTION},

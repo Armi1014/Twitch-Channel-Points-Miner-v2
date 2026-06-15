@@ -136,6 +136,7 @@ class Streamer(object):
         "watch_streak_cache",
         "watch_streak_cache_path",
         "watch_streak_account",
+        "subscription_notification_cache_path",
     ]
 
     def __init__(self, username, settings=None):
@@ -168,6 +169,7 @@ class Streamer(object):
         self.watch_streak_cache = None
         self.watch_streak_cache_path = ""
         self.watch_streak_account = None
+        self.subscription_notification_cache_path = None
 
     def __repr__(self):
         return f"Streamer(username={self.username}, channel_id={self.channel_id}, channel_points={_millify(self.channel_points)})"
@@ -314,9 +316,11 @@ class Streamer(object):
                         self.watch_streak_cache_path
                     )
         elif self.stream.watch_streak_missing and self.stream.watch_count >= 2:
-            # In practice, two WATCH rewards is a reliable proxy that streak
-            # progress for the current stream has already been counted.
-            self.stream.watch_streak_missing = False
+            logger.debug(
+                "Observed %d WATCH rewards for %s while WATCH_STREAK is still missing",
+                self.stream.watch_count,
+                self.username,
+            )
 
     def stream_up_elapsed(self):
         return self.stream_up == 0 or ((time.time() - self.stream_up) > 120)
@@ -325,7 +329,6 @@ class Streamer(object):
         return (
             self.settings.claim_drops is True
             and self.is_online is True
-            and self.stream.campaigns_ids != []
             and self.has_farmable_drops()
         )
 

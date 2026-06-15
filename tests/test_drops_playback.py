@@ -52,6 +52,13 @@ class DropsPlaybackTest(unittest.TestCase):
             "self": progress or {},
         }
 
+    def _farmable_drop(self):
+        return SimpleNamespace(
+            is_claimed=False,
+            dt_match=True,
+            requires_subscription=False,
+        )
+
     def test_updated_drop_hashes_are_present(self):
         expected_hashes = {
             "VideoPlayerStreamInfoOverlayChannel": "e785b65ff71ad7b363b34878335f27dd9372869ad0c5740a130b9268bcdbe7e7",
@@ -60,6 +67,7 @@ class DropsPlaybackTest(unittest.TestCase):
             "ViewerDropsDashboard": "d9cae7761dafab85908c85e6683cb4201b449e66ac3bb5e894f15ff12aeafaa7",
             "DropCampaignDetails": "039277bf98f3130929262cc7c6efd9c141ca3749cb6dca442fc8ead9a53f77c1",
             "DropsHighlightService_AvailableDrops": "782dad0f032942260171d2d80a654f88bdd0c5a9dddc392e9bc92218a0f42d20",
+            "SubscriptionsManagement_SubscriptionBenefits": "b21eec80bf7f902cc52c3f6552cd79b0b651b61bf891c9033efef22c8c8bcca6",
         }
 
         for operation_name, expected_hash in expected_hashes.items():
@@ -335,6 +343,51 @@ class DropsPlaybackTest(unittest.TestCase):
             json_data["variables"],
             {"input": {"dropInstanceID": "drop-instance-id"}},
         )
+
+    def test_campaign_sync_runs_when_drops_enabled_even_if_streamers_offline(self):
+        streamer = self._streamer(claim_drops=True)
+        streamer.is_online = False
+
+        self.assertTrue(self.twitch._Twitch__streamers_require_campaign_sync([streamer]))
+
+    def test_drops_condition_allows_fallback_campaigns_without_highlight_ids(self):
+        streamer = self._streamer(claim_drops=True)
+        streamer.is_online = True
+        streamer.stream.campaigns_ids = []
+        streamer.stream.campaigns = [SimpleNamespace(drops=[self._farmable_drop()])]
+
+        self.assertTrue(streamer.drops_condition())
+
+    def test_campaign_matches_streamer_without_highlight_ids_by_game_and_channel(self):
+        streamer = self._streamer(claim_drops=True)
+        streamer.channel_id = "channel-id"
+        streamer.stream.game = {"id": "game-id", "displayName": "Game"}
+        streamer.stream.campaigns_ids = []
+        campaign = SimpleNamespace(
+            id="campaign-id",
+            drops=[self._farmable_drop()],
+            game={
+                "id": "game-id",
+                "displayName": "Game",
+                "boxArtURL": "https://example.invalid/game.jpg",
+            },
+            channels=["channel-id"],
+        )
+
+        self.assertTrue(self.twitch._campaign_matches_streamer(campaign, streamer))
+
+    def test_available_drops_persisted_query_not_found_falls_back_to_empty_ids(self):
+        streamer = self._streamer(claim_drops=True)
+        streamer.channel_id = "channel-id"
+
+        with patch.object(
+            Twitch,
+            "post_gql_request",
+            return_value={"errors": [{"message": "PersistedQueryNotFound"}]},
+        ):
+            ids = self.twitch._Twitch__get_campaign_ids_from_streamer(streamer)
+
+        self.assertEqual(ids, [])
 
 
 if __name__ == "__main__":

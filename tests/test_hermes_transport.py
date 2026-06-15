@@ -230,6 +230,32 @@ class HermesTransportTest(unittest.TestCase):
                 "event-created",
                 "456",
             ),
+            (
+                PubsubTopic("user-subscribe-events-v1", user_id="123"),
+                {
+                    "type": "gifted-sub-notification",
+                    "server_time": 1704067200,
+                    "notification": {
+                        "pubsub": {"channel_id": "456"},
+                    },
+                },
+                "gifted-sub-notification",
+                "123",
+            ),
+            (
+                PubsubTopic("onsite-notifications", user_id="123"),
+                {
+                    "type": "create-notification",
+                    "data": {
+                        "notification": {
+                            "type": "sub_gift_received",
+                            "mobile_destination_key": "456",
+                        },
+                    },
+                },
+                "create-notification",
+                "123",
+            ),
         ]
 
         for topic, payload, expected_type, expected_channel_id in cases:
