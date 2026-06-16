@@ -61,7 +61,7 @@ class DropsPlaybackTest(unittest.TestCase):
 
     def test_updated_drop_hashes_are_present(self):
         expected_hashes = {
-            "PlaybackAccessToken": "3093517e37e4f4cb48906155bcd894150aef92617939236d2508f3375ab732ce",
+            "PlaybackAccessToken": "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9",
             "VideoPlayerStreamInfoOverlayChannel": "a5f2e34d626a9f4f5c0204f910bab2194948a9502089be558bb6e779a9e1b3d2",
             "ChannelPointsContext": "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3",
             "Inventory": "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",

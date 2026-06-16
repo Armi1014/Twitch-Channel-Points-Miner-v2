@@ -83,7 +83,7 @@ Drops depend on two things:
 
 This fork keeps drops claiming running when `claim_drops=True`, treats common Twitch campaign discovery failures as non-fatal, and uses fallback campaign matching when highlighted campaign IDs are missing.
 
-The current drops-related Twitch GQL hashes are synced from [mpforce's working implementation](https://github.com/mpforce1/Twitch-Channel-Points-Miner). Twitch can still return transient `service timeout` or backend errors; those are Twitch-side and the miner should continue running.
+The current drops-related Twitch GQL hashes are checked against live Twitch behavior and compared with [mpforce's working implementation](https://github.com/mpforce1/Twitch-Channel-Points-Miner). Twitch can still return transient `service timeout` or backend errors; those are Twitch-side and the miner should continue running.
 
 ## Subscription Notifications
 
