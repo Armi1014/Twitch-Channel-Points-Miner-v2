@@ -66,7 +66,7 @@ class DropsPlaybackTest(unittest.TestCase):
             "ChannelPointsContext": "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3",
             "Inventory": "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
             "ViewerDropsDashboard": "5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619",
-            "DropCampaignDetails": "f6396f5ffdde867a8f6f6da18286e4baf02e5b98d14689a69b5af320a4c7b7b8",
+            "DropCampaignDetails": "039277bf98f3130929262cc7c6efd9c141ca3749cb6dca442fc8ead9a53f77c1",
             "DropsHighlightService_AvailableDrops": "9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f",
             "SubscriptionsManagement_SubscriptionBenefits": "b21eec80bf7f902cc52c3f6552cd79b0b651b61bf891c9033efef22c8c8bcca6",
         }
