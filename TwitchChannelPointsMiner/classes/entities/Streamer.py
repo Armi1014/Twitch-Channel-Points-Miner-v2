@@ -461,5 +461,8 @@ class Streamer(object):
     def update_community_goal(self, community_goal):
         self.community_goals[community_goal.goal_id] = community_goal
 
+    def add_community_goal(self, community_goal):
+        self.update_community_goal(community_goal)
+
     def delete_community_goal(self, goal_id):
-        self.community_goals.pop(goal_id)
+        self.community_goals.pop(goal_id, None)
