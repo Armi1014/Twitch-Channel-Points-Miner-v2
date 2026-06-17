@@ -50,7 +50,7 @@ That file is not a full streamer list. Entries appear when the miner creates or 
 
 ### What do the watch streak limits mean?
 
-`MAX_STREAK_ATTEMPTS_PER_BROADCAST = 2` means the miner retries a streamer's current broadcast at most twice before giving up for that broadcast.
+The miner now retries pending streaks through the current broadcast. A failed watch window releases the slot for other pending streaks, then retries later after a short cooldown.
 
 `WATCH_STREAK_MAX_PARALLEL = 2` means at most two streak attempts are watched at the same time. Values above `2` are currently capped by Twitch's two-stream watch limit.
 

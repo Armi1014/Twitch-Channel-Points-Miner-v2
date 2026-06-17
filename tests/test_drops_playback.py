@@ -62,19 +62,29 @@ class DropsPlaybackTest(unittest.TestCase):
     def test_updated_drop_hashes_are_present(self):
         expected_hashes = {
             "PlaybackAccessToken": "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9",
-            "VideoPlayerStreamInfoOverlayChannel": "a5f2e34d626a9f4f5c0204f910bab2194948a9502089be558bb6e779a9e1b3d2",
+            "VideoPlayerStreamInfoOverlayChannel": "e785b65ff71ad7b363b34878335f27dd9372869ad0c5740a130b9268bcdbe7e7",
             "ChannelPointsContext": "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3",
-            "Inventory": "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
-            "ViewerDropsDashboard": "5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619",
+            "Inventory": "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
+            "ViewerDropsDashboard": "d9cae7761dafab85908c85e6683cb4201b449e66ac3bb5e894f15ff12aeafaa7",
             "DropCampaignDetails": "039277bf98f3130929262cc7c6efd9c141ca3749cb6dca442fc8ead9a53f77c1",
-            "DropsHighlightService_AvailableDrops": "9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f",
-            "SubscriptionsManagement_SubscriptionBenefits": "b21eec80bf7f902cc52c3f6552cd79b0b651b61bf891c9033efef22c8c8bcca6",
+            "DropsHighlightService_AvailableDrops": "782dad0f032942260171d2d80a654f88bdd0c5a9dddc392e9bc92218a0f42d20",
         }
 
         for operation_name, expected_hash in expected_hashes.items():
             operation = getattr(GQLOperations, operation_name)
             actual_hash = operation["extensions"]["persistedQuery"]["sha256Hash"]
             self.assertEqual(actual_hash, expected_hash)
+
+    def test_subscription_benefits_uses_full_query_not_stale_hash(self):
+        operation = GQLOperations.SubscriptionsManagement_SubscriptionBenefits
+
+        self.assertEqual(
+            operation["operationName"],
+            "SubscriptionsManagement_SubscriptionBenefits",
+        )
+        self.assertIn("query SubscriptionsManagement_SubscriptionBenefits", operation["query"])
+        self.assertIn("criteria: $criteria", operation["query"])
+        self.assertNotIn("extensions", operation)
 
     def test_default_playback_simulation_is_always(self):
         settings = StreamerSettings()
@@ -133,6 +143,59 @@ class DropsPlaybackTest(unittest.TestCase):
         mocked_prime.assert_not_called()
         mocked_request.assert_called_once()
         self.assertEqual(mocked_request.call_args.args[:2], ("POST", streamer.stream.spade_url))
+
+    def test_active_drops_send_spade_even_when_hls_prime_fails(self):
+        streamer = self._streamer(playback_simulation=PlaybackSimulationMode.ALWAYS)
+        streamer.is_online = True
+        streamer.online_at = time.time() - 60
+        streamer.stream.spade_url = "https://spade.example/minute"
+        streamer.stream.payload = [{"event": "minute-watched"}]
+        streamer.stream.campaigns_ids = ["campaign-id"]
+        self.twitch.running = True
+
+        def stop_loop(*_args, **_kwargs):
+            self.twitch.running = False
+
+        with (
+            patch.object(Twitch, "_refresh_selection_context"),
+            patch.object(Twitch, "_select_streamers_to_watch", return_value=[0]),
+            patch.object(Twitch, "_prime_stream_playback", return_value=False),
+            patch.object(
+                Twitch,
+                "_request_with_retry",
+                return_value=FakeResponse(status_code=204),
+            ) as mocked_request,
+            patch.object(Twitch, "_Twitch__chuncked_sleep", side_effect=stop_loop),
+        ):
+            self.twitch.send_minute_watched_events([streamer], [Priority.ORDER])
+
+        mocked_request.assert_called_once()
+        self.assertEqual(mocked_request.call_args.args[:2], ("POST", streamer.stream.spade_url))
+
+    def test_non_drop_stream_skips_spade_when_hls_prime_fails(self):
+        streamer = self._streamer(
+            claim_drops=False,
+            playback_simulation=PlaybackSimulationMode.ALWAYS,
+        )
+        streamer.is_online = True
+        streamer.online_at = time.time() - 60
+        streamer.stream.spade_url = "https://spade.example/minute"
+        streamer.stream.payload = [{"event": "minute-watched"}]
+        self.twitch.running = True
+
+        def stop_loop(*_args, **_kwargs):
+            self.twitch.running = False
+
+        with (
+            patch.object(Twitch, "_refresh_selection_context"),
+            patch.object(Twitch, "_select_streamers_to_watch", return_value=[0]),
+            patch.object(Twitch, "_prime_stream_playback", return_value=False),
+            patch.object(Twitch, "_request_with_retry") as mocked_request,
+            patch.object(Twitch, "_Twitch__chuncked_sleep", side_effect=stop_loop),
+        ):
+            self.twitch.send_minute_watched_events([streamer], [Priority.ORDER])
+
+        mocked_request.assert_not_called()
 
     def test_hls_playback_caches_token_and_playlist_url(self):
         streamer = self._streamer(playback_simulation=PlaybackSimulationMode.ALWAYS)

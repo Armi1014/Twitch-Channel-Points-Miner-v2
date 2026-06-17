@@ -83,6 +83,47 @@ class WatchStreakCacheTest(unittest.TestCase):
             self.assertIsNotNone(cache.get_session("streamer-a", "b1"))
             self.assertIsNone(cache.get_session("streamer-b", "b2", account_name="acc_two"))
 
+    def test_v4_session_loads_with_empty_verification_fields_and_saves_v5(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "watch_streak_cache.json")
+            payload = {
+                "version": 4,
+                "sessions": [
+                    {
+                        "account_name": "acc_one",
+                        "streamer_login": "streamer-a",
+                        "broadcast_id": "b1",
+                        "started_at": 1,
+                        "attempts": 0,
+                        "claimed": False,
+                        "last_attempt_at": None,
+                        "ended_at": None,
+                    }
+                ],
+                "streamer_statuses": [],
+            }
+            with open(path, "w", encoding="utf-8") as file_obj:
+                json.dump(payload, file_obj)
+
+            cache = WatchStreakCache.load_from_disk(
+                path,
+                default_account_name="acc_one",
+                account_filter="acc_one",
+            )
+            session = cache.get_session("streamer-a", "b1")
+            self.assertIsNotNone(session)
+            self.assertIsNone(session.baseline_streak_days)
+            self.assertIsNone(session.verified_streak_days)
+            self.assertIsNone(session.next_retry_at)
+
+            cache.set_session_baseline("streamer-a", "b1", 3, checked_at=10)
+            cache.save_to_disk_if_dirty(path)
+            with open(path, "r", encoding="utf-8") as file_obj:
+                saved = json.load(file_obj)
+
+            self.assertEqual(saved["version"], 5)
+            self.assertEqual(saved["sessions"][0]["baseline_streak_days"], 3)
+
     def test_miner_watch_streak_cache_path_copies_legacy_to_hidden_state(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             legacy_path = os.path.join(tmp_dir, "watch_streak_cache.tester.json")

@@ -8,7 +8,7 @@ from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 
 
 class PrioritySortingTest(unittest.TestCase):
-    def test_streak_then_drops_respects_order(self):
+    def test_streak_selection_prefers_oldest_pending_stream_before_drops(self):
         twitch = Twitch("test", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="test")
         twitch.max_watch_amount = 3
@@ -44,8 +44,8 @@ class PrioritySortingTest(unittest.TestCase):
         selected_usernames = [streamers[i].username for i in selection]
         self.assertEqual(
             selected_usernames[0],
-            "order_second_with_drop",
-            "Drop-enabled streamer should be prioritized ahead of manual order when streak ties",
+            "order_first_no_drop",
+            "Pending streak age should be prioritized before drops while streaks are unverified",
         )
         self.assertEqual(len(selection), 3)
 

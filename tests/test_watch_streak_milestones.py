@@ -451,6 +451,13 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-claim")
         streamer = self._make_streamer("streamer")
         Settings.logger = SimpleNamespace(less=True)
+        twitch.watch_streak_cache.set_streamer_status(
+            streamer.username,
+            watch_streak_detected=False,
+            watch_streak_days=4,
+            is_online=True,
+            account_name=twitch.account_username,
+        )
 
         responses = {
             "VideoPlayerStreamInfoOverlayChannel": {
@@ -481,6 +488,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
                         "self": {
                             "watchStreakMilestone": {
                                 "watchStreakMilestone": {
+                                    "watchStreakDays": 5,
                                     "achievementTimestamp": "2026-03-01T10:07:00Z"
                                 }
                             }
@@ -504,7 +512,68 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         )
         self.assertIsNotNone(session)
         self.assertTrue(session.claimed)
+        self.assertEqual(session.baseline_streak_days, 4)
+        self.assertEqual(session.verified_streak_days, 5)
         self.assertFalse(streamer.stream.watch_streak_missing)
+
+    def test_update_stream_keeps_milestone_hint_pending_without_day_increase(self):
+        twitch = Twitch("milestone-no-increase", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-no-increase")
+        streamer = self._make_streamer("streamer")
+        Settings.logger = SimpleNamespace(less=True)
+        twitch.watch_streak_cache.set_streamer_status(
+            streamer.username,
+            watch_streak_detected=False,
+            watch_streak_days=4,
+            is_online=True,
+            account_name=twitch.account_username,
+        )
+
+        responses = {
+            "VideoPlayerStreamInfoOverlayChannel": {
+                "data": {
+                    "user": {
+                        "stream": {
+                            "id": "broadcast-no-increase-1",
+                            "tags": [],
+                            "viewersCount": 21,
+                            "createdAt": "2026-03-01T10:00:00Z",
+                        },
+                        "broadcastSettings": {"title": "title", "game": {}},
+                    }
+                }
+            },
+            "RewardList": {
+                "data": {
+                    "channel": {
+                        "self": {
+                            "watchStreakMilestone": {
+                                "watchStreakMilestone": {
+                                    "watchStreakDays": 4,
+                                    "achievementTimestamp": "2026-03-01T10:07:00Z",
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+        def fake_post(json_data):
+            return responses.get(json_data.get("operationName"), {})
+
+        with patch.object(Twitch, "post_gql_request", side_effect=fake_post):
+            updated = twitch.update_stream(streamer)
+
+        self.assertTrue(updated)
+        session = twitch.watch_streak_cache.get_session(
+            streamer.username,
+            "broadcast-no-increase-1",
+            account_name=twitch.account_username,
+        )
+        self.assertIsNotNone(session)
+        self.assertFalse(session.claimed)
+        self.assertTrue(streamer.stream.watch_streak_missing)
 
     def test_update_stream_persists_watch_streak_days_in_status_cache(self):
         twitch = Twitch("milestone-days-cache", "ua")
@@ -555,7 +624,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(status)
         self.assertEqual(status.watch_streak_days, 31)
 
-    def test_update_stream_logs_detected_watch_streak_even_for_preclaimed_session(self):
+    def test_update_stream_does_not_relog_detected_watch_streak_for_preclaimed_session(self):
         twitch = Twitch("milestone-preclaimed", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-preclaimed")
         streamer = self._make_streamer("streamer")
@@ -624,10 +693,9 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertTrue(updated)
         self.assertTrue(session.claimed)
         self.assertFalse(streamer.stream.watch_streak_missing)
-        mocked_debug.assert_called_once()
-        self.assertIn("Detected WATCH_STREAK for %s", mocked_debug.call_args[0][0])
+        mocked_debug.assert_not_called()
 
-    def test_update_stream_startup_probe_logs_detected_when_already_marked(self):
+    def test_update_stream_startup_probe_does_not_relog_detected_when_already_marked(self):
         twitch = Twitch("milestone-startup-probe", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-startup-probe")
         streamer = self._make_streamer("streamer")
@@ -661,8 +729,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             updated = twitch.update_stream(streamer)
 
         self.assertTrue(updated)
-        mocked_debug.assert_called_once()
-        self.assertIn("Detected WATCH_STREAK for %s", mocked_debug.call_args[0][0])
+        mocked_debug.assert_not_called()
 
     def test_update_stream_startup_probe_skips_detected_log_when_reward_seen(self):
         twitch = Twitch("milestone-startup-no-duplicate", "ua")
@@ -775,9 +842,57 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertIsNotNone(updated)
         self.assertIsNone(updated.ended_at)
 
-    def test_streak_selection_rotates_candidates_when_many_are_eligible(self):
-        twitch = Twitch("rotation-test", "ua")
-        twitch.watch_streak_cache = WatchStreakCache(default_account_name="rotation-test")
+    def test_cleanup_releases_unverified_attempt_for_retry_cooldown(self):
+        twitch = Twitch("retry-cooldown-test", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="retry-cooldown-test")
+        twitch.streak_watch_seconds = 30
+        twitch.streak_attempt_timeout_seconds = 60
+        streamer = self._make_streamer("streamer")
+        streamer.is_online = True
+        streamer.online_at = time.time() - 600
+        streamer.stream.broadcast_id = "broadcast-retry-1"
+        streamer.stream.watch_streak_missing = True
+
+        now = time.time()
+        session = twitch.watch_streak_cache.ensure_session(
+            streamer.username,
+            streamer.stream.broadcast_id,
+            started_at=now - 600,
+            account_name=twitch.account_username,
+        )
+        twitch.watch_streak_cache.set_session_baseline(
+            streamer.username,
+            streamer.stream.broadcast_id,
+            4,
+            checked_at=now - 600,
+            account_name=twitch.account_username,
+        )
+        twitch._active_streak_attempts[session.key()] = ActiveWatchStreakAttempt(
+            session_key=session.key(),
+            streamer=streamer.username,
+            broadcast_id=streamer.stream.broadcast_id,
+            started_at=now - 61,
+            watch_counter_at_start=0,
+        )
+
+        with patch.object(Twitch, "get_watch_streak_days", return_value=4):
+            twitch._cleanup_streak_attempts([streamer], now)
+
+        updated = twitch.watch_streak_cache.get_session(
+            streamer.username,
+            streamer.stream.broadcast_id,
+            account_name=twitch.account_username,
+        )
+        self.assertIsNotNone(updated)
+        self.assertFalse(updated.claimed)
+        self.assertIsNone(updated.ended_at)
+        self.assertEqual(updated.attempts, 1)
+        self.assertGreater(updated.next_retry_at, now)
+        self.assertNotIn(session.key(), twitch._active_streak_attempts)
+
+    def test_streak_selection_prefers_longest_online_pending_streamers(self):
+        twitch = Twitch("longest-online-test", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="longest-online-test")
         twitch.max_streak_sessions = 2
         twitch.max_watch_amount = 2
 
@@ -786,37 +901,27 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         for i in range(4):
             streamer = self._make_streamer(f"streamer{i}")
             streamer.is_online = True
-            streamer.online_at = now - 120
+            streamer.online_at = now - ((4 - i) * 120)
             streamer.stream.broadcast_id = f"broadcast-{i}"
+            streamer.stream.created_at = streamer.online_at
             streamer.stream.watch_streak_missing = True
             twitch.watch_streak_cache.ensure_session(
                 streamer.username,
                 streamer.stream.broadcast_id,
-                started_at=now - 120,
+                started_at=streamer.online_at,
                 account_name=twitch.account_username,
             )
             streamers.append(streamer)
 
-        first = twitch._select_streak_streamers(
+        selection = twitch._select_streak_streamers(
             streamers,
             list(range(len(streamers))),
             [Priority.STREAK],
             now,
         )
-        twitch._active_streak_attempts = {}
-        second = twitch._select_streak_streamers(
-            streamers,
-            list(range(len(streamers))),
-            [Priority.STREAK],
-            now + 1,
-        )
 
-        first_names = [streamers[i].username for i in first]
-        second_names = [streamers[i].username for i in second]
-        self.assertEqual(len(first_names), 2)
-        self.assertEqual(len(second_names), 2)
-        self.assertNotEqual(first_names, second_names)
-        self.assertGreaterEqual(len(set(first_names + second_names)), 3)
+        selected_names = [streamers[i].username for i in selection]
+        self.assertEqual(selected_names, ["streamer0", "streamer1"])
 
     def test_streak_selection_bootstrap_creates_session_for_online_streamer(self):
         twitch = Twitch("startup-probe-test", "ua")

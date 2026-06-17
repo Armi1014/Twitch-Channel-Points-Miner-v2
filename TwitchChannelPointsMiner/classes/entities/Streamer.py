@@ -293,29 +293,12 @@ class Streamer(object):
                 0, int(getattr(self.stream, "watch_count", 0)) + int(counter or 0)
             )
 
-        if reason_code is not None and "WATCH_STREAK" in str(reason_code):
-            self.stream.watch_streak_missing = False
-            if self.watch_streak_cache is not None:
-                self.watch_streak_cache.mark_claimed(
-                    self.username,
-                    broadcast_id=self.stream.broadcast_id,
-                    now=time.time(),
-                    account_name=self.watch_streak_account,
-                )
-                self.watch_streak_cache.set_streamer_status(
-                    self.username,
-                    watch_streak_detected=True,
-                    is_online=bool(self.is_online),
-                    last_stream_started_at=getattr(self.stream, "created_at", None),
-                    broadcast_id=self.stream.broadcast_id,
-                    checked_at=time.time(),
-                    account_name=self.watch_streak_account,
-                )
-                if self.watch_streak_cache_path:
-                    self.watch_streak_cache.save_to_disk_if_dirty(
-                        self.watch_streak_cache_path
-                    )
-        elif self.stream.watch_streak_missing and self.stream.watch_count >= 2:
+        if (
+            reason_code is not None
+            and "WATCH_STREAK" not in str(reason_code)
+            and self.stream.watch_streak_missing
+            and self.stream.watch_count >= 2
+        ):
             logger.debug(
                 "Observed %d WATCH rewards for %s while WATCH_STREAK is still missing",
                 self.stream.watch_count,

@@ -7,10 +7,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, Streame
 
 
 class WatchStreakFallbackTest(unittest.TestCase):
-    def test_watch_reward_does_not_complete_streak_without_watch_streak(self):
-        twitch = Twitch("fallback-test", "ua")
-        twitch.watch_streak_cache = WatchStreakCache(default_account_name="fallback-test")
-
+    def _make_streamer(self):
         settings = StreamerSettings(
             watch_streak=True,
             claim_drops=False,
@@ -24,6 +21,13 @@ class WatchStreakFallbackTest(unittest.TestCase):
         streamer.online_at = time.time() - 600
         streamer.stream.broadcast_id = "broadcastA"
         streamer.stream.watch_streak_missing = True
+        return streamer
+
+    def test_watch_reward_does_not_complete_streak_without_watch_streak(self):
+        twitch = Twitch("fallback-test", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="fallback-test")
+
+        streamer = self._make_streamer()
         streamer.history["WATCH"] = {"counter": 2, "amount": 20}
 
         now = time.time()
@@ -54,6 +58,40 @@ class WatchStreakFallbackTest(unittest.TestCase):
         self.assertIsNone(updated_session.ended_at)
         self.assertTrue(streamer.stream.watch_streak_missing)
         self.assertIn(session.key(), twitch._active_streak_attempts)
+
+    def test_watch_streak_reward_does_not_complete_streak_without_day_increase(self):
+        twitch = Twitch("watch-streak-event-test", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="watch-streak-event-test")
+        streamer = self._make_streamer()
+        streamer.watch_streak_cache = twitch.watch_streak_cache
+        streamer.watch_streak_account = twitch.account_username
+
+        now = time.time()
+        session = twitch.watch_streak_cache.ensure_session(
+            streamer.username,
+            streamer.stream.broadcast_id,
+            started_at=now - 600,
+            account_name=twitch.account_username,
+        )
+        twitch.watch_streak_cache.set_session_baseline(
+            streamer.username,
+            streamer.stream.broadcast_id,
+            8,
+            checked_at=now - 600,
+            account_name=twitch.account_username,
+        )
+
+        streamer.update_history("WATCH_STREAK", 450)
+
+        updated_session = twitch.watch_streak_cache.get_session(
+            streamer.username,
+            streamer.stream.broadcast_id,
+            account_name=twitch.account_username,
+        )
+        self.assertIsNotNone(updated_session)
+        self.assertFalse(updated_session.claimed)
+        self.assertTrue(streamer.stream.watch_streak_missing)
+        self.assertEqual(streamer.history["WATCH_STREAK"]["counter"], 1)
 
 
 if __name__ == "__main__":

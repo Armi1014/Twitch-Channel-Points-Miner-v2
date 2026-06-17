@@ -10,7 +10,7 @@ from TwitchChannelPointsMiner.utils import dump_json
 
 logger = logging.getLogger(__name__)
 
-WATCH_STREAK_CACHE_VERSION = 4
+WATCH_STREAK_CACHE_VERSION = 5
 MIN_OFFLINE_FOR_NEW_STREAK = 30 * 60  # 30 minutes
 MAX_STREAK_ATTEMPTS_PER_BROADCAST = 2
 STALE_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60  # drop ended sessions after a week
@@ -26,6 +26,12 @@ class WatchStreakSession:
     claimed: bool = False
     last_attempt_at: float | None = None
     ended_at: float | None = None
+    baseline_streak_days: int | None = None
+    verified_streak_days: int | None = None
+    last_verification_at: float | None = None
+    last_evidence_at: float | None = None
+    next_retry_at: float | None = None
+    evidence_source: str | None = None
 
     def key(self) -> str:
         return f"{self.account_name}:{self.streamer_login}:{self.broadcast_id}"
@@ -40,10 +46,30 @@ class WatchStreakSession:
             "claimed": self.claimed,
             "last_attempt_at": self.last_attempt_at,
             "ended_at": self.ended_at,
+            "baseline_streak_days": self.baseline_streak_days,
+            "verified_streak_days": self.verified_streak_days,
+            "last_verification_at": self.last_verification_at,
+            "last_evidence_at": self.last_evidence_at,
+            "next_retry_at": self.next_retry_at,
+            "evidence_source": self.evidence_source,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "WatchStreakSession":
+        def _optional_float(key: str) -> float | None:
+            return (
+                float(data[key])
+                if data.get(key) not in [None, ""]
+                else None
+            )
+
+        def _optional_int(key: str) -> int | None:
+            return (
+                max(0, int(data[key]))
+                if data.get(key) not in [None, ""]
+                else None
+            )
+
         return cls(
             account_name=str(data.get("account_name", "")),
             streamer_login=str(data.get("streamer_login", "")),
@@ -51,13 +77,17 @@ class WatchStreakSession:
             started_at=float(data.get("started_at", 0) or 0),
             attempts=int(data.get("attempts", 0) or 0),
             claimed=bool(data.get("claimed", False)),
-            last_attempt_at=(
-                float(data["last_attempt_at"])
-                if data.get("last_attempt_at") not in [None, ""]
+            last_attempt_at=_optional_float("last_attempt_at"),
+            ended_at=_optional_float("ended_at"),
+            baseline_streak_days=_optional_int("baseline_streak_days"),
+            verified_streak_days=_optional_int("verified_streak_days"),
+            last_verification_at=_optional_float("last_verification_at"),
+            last_evidence_at=_optional_float("last_evidence_at"),
+            next_retry_at=_optional_float("next_retry_at"),
+            evidence_source=(
+                str(data.get("evidence_source"))
+                if data.get("evidence_source") not in [None, ""]
                 else None
-            ),
-            ended_at=(
-                float(data["ended_at"]) if data.get("ended_at") not in [None, ""] else None
             ),
         )
 
@@ -392,6 +422,70 @@ class WatchStreakCache:
                 self._dirty = True
             return session
 
+    def set_session_baseline(
+        self,
+        streamer_login: str,
+        broadcast_id: str,
+        baseline_streak_days: int,
+        checked_at: Optional[float] = None,
+        account_name: str | None = None,
+    ) -> Optional[WatchStreakSession]:
+        account = self._resolve_account(account_name)
+        checked_at = time.time() if checked_at is None else checked_at
+        key = self._session_key(account, streamer_login, broadcast_id)
+        with self._lock:
+            session = self._sessions.get(key)
+            if session is None:
+                return None
+            normalized_days = max(0, int(baseline_streak_days))
+            if (
+                session.baseline_streak_days != normalized_days
+                or session.last_verification_at != checked_at
+            ):
+                session.baseline_streak_days = normalized_days
+                session.last_verification_at = checked_at
+                self._dirty = True
+            return session
+
+    def record_evidence(
+        self,
+        streamer_login: str,
+        broadcast_id: str,
+        evidence_source: str,
+        now: Optional[float] = None,
+        account_name: str | None = None,
+    ) -> Optional[WatchStreakSession]:
+        account = self._resolve_account(account_name)
+        now = time.time() if now is None else now
+        key = self._session_key(account, streamer_login, broadcast_id)
+        with self._lock:
+            session = self._sessions.get(key)
+            if session is None:
+                return None
+            session.last_evidence_at = now
+            session.evidence_source = evidence_source
+            self._dirty = True
+            return session
+
+    def record_verification(
+        self,
+        streamer_login: str,
+        broadcast_id: str,
+        current_streak_days: int | None,
+        checked_at: Optional[float] = None,
+        account_name: str | None = None,
+    ) -> Optional[WatchStreakSession]:
+        account = self._resolve_account(account_name)
+        checked_at = time.time() if checked_at is None else checked_at
+        key = self._session_key(account, streamer_login, broadcast_id)
+        with self._lock:
+            session = self._sessions.get(key)
+            if session is None:
+                return None
+            session.last_verification_at = checked_at
+            self._dirty = True
+            return session
+
     def mark_attempt(
         self,
         streamer_login: str,
@@ -399,6 +493,7 @@ class WatchStreakCache:
         attempt_end_time: float,
         account_name: str | None = None,
         max_attempts: int = MAX_STREAK_ATTEMPTS_PER_BROADCAST,
+        next_retry_at: Optional[float] = None,
     ) -> WatchStreakSession:
         account = self._resolve_account(account_name)
         session = self.ensure_session(
@@ -407,8 +502,7 @@ class WatchStreakCache:
         with self._lock:
             session.attempts += 1
             session.last_attempt_at = attempt_end_time
-            if session.attempts >= max_attempts and session.ended_at is None:
-                session.ended_at = attempt_end_time
+            session.next_retry_at = next_retry_at
             self._dirty = True
             return session
 
@@ -418,6 +512,8 @@ class WatchStreakCache:
         broadcast_id: str | None = None,
         now: Optional[float] = None,
         account_name: str | None = None,
+        verified_streak_days: int | None = None,
+        evidence_source: str | None = None,
     ) -> WatchStreakSession:
         account = self._resolve_account(account_name)
         now = time.time() if now is None else now
@@ -436,6 +532,13 @@ class WatchStreakCache:
         with self._lock:
             session.claimed = True
             session.ended_at = session.ended_at or now
+            session.next_retry_at = None
+            session.last_verification_at = now
+            if verified_streak_days is not None:
+                session.verified_streak_days = max(0, int(verified_streak_days))
+            if evidence_source:
+                session.evidence_source = evidence_source
+                session.last_evidence_at = session.last_evidence_at or now
             self._dirty = True
             return session
 
@@ -481,7 +584,7 @@ class WatchStreakCache:
     def pending_sessions(
         self,
         account_name: str | None = None,
-        max_attempts: int = MAX_STREAK_ATTEMPTS_PER_BROADCAST,
+        max_attempts: int | None = None,
     ) -> list[WatchStreakSession]:
         account = self._resolve_account(account_name)
         with self._lock:
@@ -491,7 +594,7 @@ class WatchStreakCache:
                 if s.account_name == account
                 and s.ended_at is None
                 and s.claimed is False
-                and s.attempts < max_attempts
+                and (max_attempts is None or s.attempts < max_attempts)
             ]
 
     def record_online(

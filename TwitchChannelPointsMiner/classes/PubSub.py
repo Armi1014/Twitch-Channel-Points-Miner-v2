@@ -103,6 +103,11 @@ class PubSubHandler(MessageListener):
                         },
                     )
                     self.streamers[streamer_index].update_history(reason_code, earned)
+                    if reason_code is not None and "WATCH_STREAK" in str(reason_code):
+                        self.twitch.record_watch_streak_evidence(
+                            self.streamers[streamer_index],
+                            evidence_source="pubsub_watch_streak",
+                        )
                     if Settings.enable_analytics is True:
                         self.streamers[streamer_index].persistent_annotations(
                             reason_code, f"+{earned} - {reason_code}"

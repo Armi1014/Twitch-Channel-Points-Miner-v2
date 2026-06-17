@@ -33,7 +33,9 @@ Relevant code:
 - Persisted watch streak cache (`logs/.state/watch_streak_cache.<account>.json`) to avoid wasting startup time repeating stale checks.
 - Session-based watch streak tracking (attempts, claim state, ended state, broadcast identity).
 - Better handling for Twitch observability gaps:
-  - normal `WATCH` rewards prove playback is working, but only `WATCH_STREAK` or Twitch streak state marks the streak as completed.
+  - normal `WATCH` rewards prove playback is working.
+  - `WATCH_STREAK` and Twitch milestone state are hints, not final proof.
+  - the streak is completed only when Twitch's streak day count increases.
 
 Relevant code:
 - `TwitchChannelPointsMiner/WatchStreakCache.py`

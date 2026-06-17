@@ -363,4 +363,8 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
         first_request = mocked_post.call_args_list[0].args[0]
         second_request = mocked_post.call_args_list[1].args[0]
         self.assertEqual(first_request["variables"]["limit"], 100)
+        self.assertEqual(first_request["variables"]["criteria"], {})
+        self.assertIsNone(first_request["variables"]["cursor"])
         self.assertEqual(second_request["variables"]["cursor"], "cursor-1")
+        self.assertNotIn("filter", first_request["variables"])
+        self.assertNotIn("platform", first_request["variables"])

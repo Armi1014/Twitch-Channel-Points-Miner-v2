@@ -67,10 +67,10 @@ For implementation history and deeper notes, see [FORK_FEATURES.md](FORK_FEATURE
 The miner now treats Twitch watch streaks conservatively:
 
 - `WATCH` means normal watch points were awarded.
-- `WATCH_STREAK` means the streak reward was confirmed.
-- Normal `WATCH` rewards no longer mark the streak as completed.
+- `WATCH_STREAK` is treated as a hint that Twitch may have awarded the streak.
+- The miner marks a streak completed only after Twitch's streak day count increases.
 
-This matters because Twitch can award normal watch points before it sends the streak reward. The miner keeps waiting for real streak proof instead of stopping too early.
+This matters because Twitch can send misleading streak signals. The miner keeps retrying pending streaks through the current broadcast instead of stopping on a false alarm.
 
 More streak details are in [FAQ.md](FAQ.md).
 
