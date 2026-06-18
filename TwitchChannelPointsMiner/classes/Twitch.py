@@ -1044,7 +1044,11 @@ class Twitch(object):
             "expires_at": self._decode_playback_token_expiry(value),
         }
 
-    def _get_or_update_playback_access_token(self, streamer) -> dict | None:
+    def _get_or_update_playback_access_token(
+        self,
+        streamer,
+        force_refresh: bool = False,
+    ) -> dict | None:
         stream = getattr(streamer, "stream", None)
         if stream is None:
             return None
@@ -1053,7 +1057,12 @@ class Twitch(object):
         expires_at = (
             cached_token.get("expires_at") if isinstance(cached_token, dict) else None
         )
-        if cached_token and expires_at is not None and expires_at > time.time() + 30:
+        if (
+            not force_refresh
+            and cached_token
+            and expires_at is not None
+            and expires_at > time.time() + 30
+        ):
             return cached_token
 
         playback_token = self._fetch_playback_access_token(streamer)
@@ -1072,14 +1081,21 @@ class Twitch(object):
         )
         return playback_token
 
-    def _get_hls_playlist_url(self, streamer) -> str | None:
+    def _get_hls_playlist_url(
+        self,
+        streamer,
+        force_refresh: bool = False,
+    ) -> str | None:
         stream = getattr(streamer, "stream", None)
         if stream is None:
             return None
-        if stream.hls_url:
+        if stream.hls_url and not force_refresh:
             return stream.hls_url
 
-        playback_token = self._get_or_update_playback_access_token(streamer)
+        playback_token = self._get_or_update_playback_access_token(
+            streamer,
+            force_refresh=force_refresh,
+        )
         if playback_token is None:
             return None
         signature = playback_token["signature"]
@@ -1117,8 +1133,15 @@ class Twitch(object):
         stream.hls_url = quality_url
         return quality_url
 
-    def _prime_stream_playback(self, streamer) -> bool:
-        quality_url = self._get_hls_playlist_url(streamer)
+    def _prime_stream_playback(
+        self,
+        streamer,
+        force_refresh: bool = False,
+    ) -> bool:
+        quality_url = self._get_hls_playlist_url(
+            streamer,
+            force_refresh=force_refresh,
+        )
         if quality_url is None:
             return False
 
@@ -1162,6 +1185,15 @@ class Twitch(object):
             stream_response.status_code,
         )
         return stream_response.status_code == 200
+
+    def _streamer_has_active_streak_attempt(self, streamer) -> bool:
+        username = getattr(streamer, "username", None)
+        broadcast_id = getattr(getattr(streamer, "stream", None), "broadcast_id", None)
+        return any(
+            attempt.streamer == username
+            and (broadcast_id is None or attempt.broadcast_id == broadcast_id)
+            for attempt in self._active_streak_attempts.values()
+        )
 
     def _streamer_has_active_drops(self, streamer) -> bool:
         settings = getattr(streamer, "settings", None)
@@ -1724,9 +1756,16 @@ class Twitch(object):
             return None
         return parsed_limit if parsed_limit >= 0 else None
 
-    def _has_pending_watch_streak(self, streamer, now: float) -> bool:
+    def _streamer_can_attempt_watch_streak(self, streamer) -> bool:
         settings = getattr(streamer, "settings", None)
-        if getattr(settings, "watch_streak", False) is not True:
+        return (
+            getattr(settings, "watch_streak", False) is True
+            and getattr(streamer, "channel_points_enabled", True) is True
+            and getattr(streamer, "chat_banned", False) is False
+        )
+
+    def _has_pending_watch_streak(self, streamer, now: float) -> bool:
+        if not self._streamer_can_attempt_watch_streak(streamer):
             return False
         session = self._ensure_watch_streak_session(streamer, now)
         return self._session_is_eligible(session, streamer, now)
@@ -2056,6 +2095,8 @@ class Twitch(object):
         if session is None:
             return False
         if session.claimed or session.ended_at is not None:
+            return False
+        if not self._streamer_can_attempt_watch_streak(streamer):
             return False
         if streamer.stream.watch_streak_missing is False:
             return False
@@ -2388,7 +2429,12 @@ class Twitch(object):
             )
             streamer_obj = next((s for s in streamers if s.username == attempt.streamer), None)
 
-            if session is None or streamer_obj is None or streamer_obj.is_online is False:
+            if (
+                session is None
+                or streamer_obj is None
+                or streamer_obj.is_online is False
+                or not self._streamer_can_attempt_watch_streak(streamer_obj)
+            ):
                 self.watch_streak_cache.mark_ended(
                     attempt.streamer,
                     attempt.broadcast_id,
@@ -2444,11 +2490,15 @@ class Twitch(object):
                 max_attempts=self.max_streak_attempts,
                 next_retry_at=now + STREAK_RETRY_COOLDOWN_SECONDS,
             )
-            logger.debug(
+            self._log_watch_issue(
+                attempt.streamer,
+                "watch_streak_retry",
                 "[streak] %s was not verified after attempt %d for broadcast %s; retry after cooldown",
                 attempt.streamer,
                 session.attempts,
                 attempt.broadcast_id,
+                ttl=300,
+                level=logging.INFO,
             )
         self._active_streak_attempts = remaining
 
@@ -2471,8 +2521,10 @@ class Twitch(object):
             candidates = []
             for idx in streamers_index:
                 streamer = streamers[idx]
+                if not self._streamer_can_attempt_watch_streak(streamer):
+                    continue
                 session = self._ensure_watch_streak_session(streamer, now)
-                if session is None or not self._session_is_eligible(session, streamer):
+                if session is None or not self._session_is_eligible(session, streamer, now):
                     continue
                 candidates.append(idx)
 
@@ -2549,7 +2601,12 @@ class Twitch(object):
                         )
                         playback_prime_failed = (
                             should_prime_playback
-                            and self._prime_stream_playback(streamers[index]) is False
+                            and self._prime_stream_playback(
+                                streamers[index],
+                                force_refresh=self._streamer_has_active_streak_attempt(
+                                    streamers[index]
+                                ),
+                            ) is False
                         )
                         if playback_prime_failed:
                             if not self._streamer_has_active_drops(streamers[index]):

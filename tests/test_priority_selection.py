@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.classes.Settings import Priority
-from TwitchChannelPointsMiner.classes.Twitch import Twitch
+from TwitchChannelPointsMiner.classes.Twitch import ActiveWatchStreakAttempt, Twitch
 from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
 from TwitchChannelPointsMiner.utils import set_default_settings
 
@@ -233,6 +233,109 @@ class PrioritySelectionTest(unittest.TestCase):
 
         selected_usernames = [streamers[index].username for index in selection]
         self.assertEqual(selected_usernames, ["capped_streak", "first_uncapped"])
+
+    def test_disabled_watch_streak_does_not_preempt_favorites(self):
+        twitch = Twitch("disabled-streak", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name="disabled-streak")
+        twitch.max_watch_amount = 2
+        twitch.max_streak_sessions = 2
+
+        now = 1_700_000_000
+
+        def make_streamer(name, *, favorite=False, watch_streak=False):
+            streamer = Streamer(
+                name,
+                settings=StreamerSettings(
+                    watch_streak=watch_streak,
+                    favorite=favorite,
+                    claim_drops=False,
+                    claim_moments=False,
+                    make_predictions=False,
+                    follow_raid=False,
+                    community_goals=False,
+                ),
+            )
+            streamer.channel_points = 100
+            streamer.is_online = True
+            streamer.online_at = now - 600
+            streamer.stream.broadcast_id = f"broadcast-{name}"
+            streamer.stream.watch_streak_missing = True
+            return streamer
+
+        random_stream = make_streamer("random_stream", watch_streak=False)
+        favorite_one = make_streamer("favorite_one", favorite=True)
+        favorite_two = make_streamer("favorite_two", favorite=True)
+
+        with patch("TwitchChannelPointsMiner.classes.Twitch.time.time", return_value=now):
+            streamers = [random_stream, favorite_one, favorite_two]
+            selection = twitch._select_streamers_to_watch(
+                streamers,
+                [0, 1, 2],
+                [Priority.FAVORITE, Priority.ORDER],
+            )
+
+        selected_usernames = [streamers[index].username for index in selection]
+        self.assertEqual(selected_usernames, ["favorite_one", "favorite_two"])
+        self.assertIsNone(
+            twitch.watch_streak_cache.latest_session_for_streamer(
+                "random_stream",
+                account_name=twitch.account_username,
+            )
+        )
+
+    def test_active_streak_attempt_ends_when_streak_or_points_are_disabled(self):
+        now = 1_700_000_000
+
+        for name, watch_streak, points_enabled in [
+            ("streak_disabled", False, True),
+            ("points_disabled", True, False),
+        ]:
+            with self.subTest(name=name):
+                twitch = Twitch("cleanup-streak", "ua")
+                twitch.watch_streak_cache = WatchStreakCache(
+                    default_account_name="cleanup-streak"
+                )
+                streamer = Streamer(
+                    name,
+                    settings=StreamerSettings(
+                        watch_streak=watch_streak,
+                        claim_drops=False,
+                        claim_moments=False,
+                        make_predictions=False,
+                        follow_raid=False,
+                        community_goals=False,
+                    ),
+                )
+                streamer.channel_points = 100
+                streamer.channel_points_enabled = points_enabled
+                streamer.is_online = True
+                streamer.online_at = now - 600
+                streamer.stream.broadcast_id = f"broadcast-{name}"
+                streamer.stream.watch_streak_missing = True
+
+                session = twitch.watch_streak_cache.ensure_session(
+                    streamer.username,
+                    streamer.stream.broadcast_id,
+                    started_at=now - 600,
+                    account_name=twitch.account_username,
+                )
+                twitch._active_streak_attempts[session.key()] = ActiveWatchStreakAttempt(
+                    session_key=session.key(),
+                    streamer=streamer.username,
+                    broadcast_id=session.broadcast_id,
+                    started_at=now - 300,
+                )
+
+                twitch._cleanup_streak_attempts([streamer], now)
+
+                self.assertEqual(twitch._active_streak_attempts, {})
+                ended = twitch.watch_streak_cache.get_session(
+                    streamer.username,
+                    streamer.stream.broadcast_id,
+                    account_name=twitch.account_username,
+                )
+                self.assertIsNotNone(ended)
+                self.assertEqual(ended.ended_at, now)
 
 
 if __name__ == "__main__":

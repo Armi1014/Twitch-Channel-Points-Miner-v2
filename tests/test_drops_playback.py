@@ -284,6 +284,62 @@ class DropsPlaybackTest(unittest.TestCase):
         self.assertEqual(token, refreshed_token)
         self.assertIsNone(streamer.stream.hls_url)
 
+    def test_forced_playback_refresh_bypasses_cached_token_and_playlist(self):
+        streamer = self._streamer(playback_simulation=PlaybackSimulationMode.ALWAYS)
+        streamer.stream.playback_access_token = {
+            "signature": "old-signature",
+            "value": json.dumps({"expires": int(time.time()) + 600}),
+            "expires_at": time.time() + 600,
+        }
+        streamer.stream.hls_url = "https://video.example/old.m3u8"
+        refreshed_token = {
+            "signature": "new-signature",
+            "value": json.dumps({"expires": int(time.time()) + 900}),
+            "expires_at": time.time() + 900,
+        }
+
+        with (
+            patch.object(
+                Twitch,
+                "_fetch_playback_access_token",
+                return_value=refreshed_token,
+            ) as mocked_fetch,
+            patch.object(
+                Twitch,
+                "_request_with_retry",
+                side_effect=[
+                    FakeResponse(
+                        200,
+                        "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=160000\nhttps://video.example/new.m3u8\n",
+                    ),
+                    FakeResponse(
+                        200,
+                        "#EXTM3U\n#EXTINF:2.000,\nhttps://video.example/new-segment.ts\n",
+                    ),
+                    FakeResponse(200),
+                ],
+            ) as mocked_request,
+        ):
+            self.assertTrue(
+                self.twitch._prime_stream_playback(streamer, force_refresh=True)
+            )
+
+        mocked_fetch.assert_called_once_with(streamer)
+        self.assertEqual(streamer.stream.playback_access_token, refreshed_token)
+        self.assertEqual(streamer.stream.hls_url, "https://video.example/new.m3u8")
+        self.assertEqual(
+            mocked_request.call_args_list[0].args[:2],
+            (
+                "GET",
+                "https://usher.ttvnw.net/api/channel/hls/testchannel.m3u8"
+                f"?sig=new-signature&token={refreshed_token['value']}",
+            ),
+        )
+        self.assertEqual(
+            mocked_request.call_args_list[1].args[:2],
+            ("GET", "https://video.example/new.m3u8"),
+        )
+
     def test_stream_update_resets_hls_cache_on_new_broadcast(self):
         streamer = self._streamer(playback_simulation=PlaybackSimulationMode.ALWAYS)
         streamer.stream.update("broadcast-a", "Title A", {}, [], 1)
