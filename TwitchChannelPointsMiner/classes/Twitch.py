@@ -19,7 +19,8 @@ import requests
 from pathlib import Path
 from secrets import choice, token_hex
 from typing import Dict, Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
+
 # from urllib.parse import quote
 # from base64 import urlsafe_b64decode
 # from datetime import datetime
@@ -31,6 +32,7 @@ from TwitchChannelPointsMiner.classes.entities.CommunityGoal import CommunityGoa
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
 from TwitchChannelPointsMiner.classes.entities.Streamer import PlaybackSimulationMode
 from TwitchChannelPointsMiner.classes.Exceptions import (
+    BadCredentialsException,
     StreamerDoesNotExistException,
     StreamerIsOfflineException,
 )
@@ -200,12 +202,17 @@ class Twitch(object):
         self.subscription_notification_cache_path = None
 
     def login(self):
-        if not os.path.isfile(self.cookies_file):
-            if self.twitch_login.login_flow():
-                self.twitch_login.save_cookies(self.cookies_file)
-        else:
+        if os.path.isfile(self.cookies_file):
             self.twitch_login.load_cookies(self.cookies_file)
-            self.twitch_login.set_token(self.twitch_login.get_auth_token())
+            self.twitch_login.set_token(
+                self.twitch_login.get_cookie_value("auth-token")
+            )
+            if self.twitch_login.check_login():
+                return
+            logger.warning("Saved Twitch login is invalid; please log in again")
+        if not self.twitch_login.login_flow():
+            raise BadCredentialsException("Twitch login did not complete")
+        self.twitch_login.save_cookies(self.cookies_file)
 
     # === STREAMER / STREAM / INFO === #
     def update_stream(self, streamer):
@@ -363,14 +370,18 @@ class Twitch(object):
             self._invalidate_stream_info_cache(cache_key)
             raise StreamerIsOfflineException
 
-        stream = user.get("stream") if isinstance(user, dict) else None
+        if not isinstance(user, dict):
+            return cached_entry
+        stream = user.get("stream")
         if stream is None:
             self._invalidate_stream_info_cache(cache_key)
             raise StreamerIsOfflineException
+        if not isinstance(stream, dict):
+            return cached_entry
 
-        broadcast_settings = (
-            stream.get("broadcastSettings") if isinstance(stream, dict) else None
-        )
+        broadcast_settings = user.get("broadcastSettings")
+        if not isinstance(broadcast_settings, dict):
+            broadcast_settings = stream.get("broadcastSettings")
         if not isinstance(broadcast_settings, dict):
             broadcast_settings = {}
 
@@ -905,7 +916,7 @@ class Twitch(object):
     def __check_connection_handler(self, chunk_size):
         # The success rate It's very hight usually. Why we have failed?
         # Check internet connection ...
-        while internet_connection_available() is False:
+        while self.running and internet_connection_available() is False:
             random_sleep = random.randint(1, 3)
             logger.warning(
                 f"No internet connection available! Retry after {random_sleep}m"
@@ -959,7 +970,7 @@ class Twitch(object):
                     request_name,
                     attempt,
                     max_attempts,
-                    exc,
+                    type(exc).__name__,
                     delay,
                 )
                 if delay > 0:
@@ -977,9 +988,15 @@ class Twitch(object):
         parsed = urlparse(value.strip())
         return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
-    def _last_http_url_from_playlist(self, playlist_text: str) -> str | None:
+    def _last_http_url_from_playlist(
+        self, playlist_text: str, base_url: str | None = None
+    ) -> str | None:
         for line in reversed((playlist_text or "").splitlines()):
             candidate = line.strip()
+            if not candidate or candidate.startswith("#"):
+                continue
+            if base_url:
+                candidate = urljoin(base_url, candidate)
             if self._is_http_url(candidate):
                 return candidate
         return None
@@ -1027,7 +1044,12 @@ class Twitch(object):
             )
             return None
 
-        token_data = response["data"].get("streamPlaybackAccessToken") or {}
+        data = response.get("data")
+        token_data = (
+            data.get("streamPlaybackAccessToken") if isinstance(data, dict) else None
+        )
+        if not isinstance(token_data, dict):
+            return None
         signature = token_data.get("signature")
         value = token_data.get("value")
         if not signature or not value:
@@ -1089,15 +1111,14 @@ class Twitch(object):
         stream = getattr(streamer, "stream", None)
         if stream is None:
             return None
-        if stream.hls_url and not force_refresh:
-            return stream.hls_url
-
         playback_token = self._get_or_update_playback_access_token(
             streamer,
             force_refresh=force_refresh,
         )
         if playback_token is None:
             return None
+        if stream.hls_url:
+            return stream.hls_url
         signature = playback_token["signature"]
         value = playback_token["value"]
         qualities_url = (
@@ -1119,7 +1140,9 @@ class Twitch(object):
         if qualities_response.status_code != 200:
             return None
 
-        quality_url = self._last_http_url_from_playlist(qualities_response.text)
+        quality_url = self._last_http_url_from_playlist(
+            qualities_response.text, qualities_url
+        )
         if quality_url is None:
             self._log_watch_issue(
                 streamer.username,
@@ -1161,7 +1184,9 @@ class Twitch(object):
             streamer.stream.hls_url = None
             return False
 
-        stream_url = self._last_http_url_from_playlist(stream_list_response.text)
+        stream_url = self._last_http_url_from_playlist(
+            stream_list_response.text, quality_url
+        )
         if stream_url is None:
             self._log_watch_issue(
                 streamer.username,
@@ -1596,7 +1621,9 @@ class Twitch(object):
                 timeout=20,
             )
             logger.debug(
-                f"Data: {json_data}, Status code: {response.status_code}, Content: {response.text}"
+                "GQL operation %s returned HTTP status %s",
+                operation_name,
+                response.status_code,
             )
             if response.status_code < 200 or response.status_code >= 300:
                 key = ("gql_http_status", operation_name, response.status_code)
@@ -1661,9 +1688,7 @@ class Twitch(object):
                     "X-Device-Id": self.device_id,
                 },
             )
-            logger.debug(
-                f"Data: [], Status code: {response.status_code}, Content: {response.text}"
-            )
+            logger.debug("Integrity request returned HTTP status %s", response.status_code)
             self.integrity = response.json().get("token", None)
             # logger.info(f"integrity: {self.integrity}")
 
@@ -1831,6 +1856,8 @@ class Twitch(object):
                     self._drop_progress_value(streamer) if drop_rank == 0 else float("inf")
                 )
                 key_parts.append((drop_rank, drop_progress))
+            elif prior == Priority.WEEKLY_REWARDS:
+                key_parts.append(0 if streamer.missing_weekly_reward() else 1)
             elif prior == Priority.SUBSCRIBED:
                 sub_rank = 0 if streamer.viewer_has_points_multiplier() else 1
                 points = (
@@ -1866,6 +1893,12 @@ class Twitch(object):
         return tuple(key_parts)
 
     def _priority_candidates(self, streamers, streamers_index, prior, now):
+        if prior == Priority.WEEKLY_REWARDS:
+            return [
+                index
+                for index in streamers_index
+                if streamers[index].missing_weekly_reward()
+            ]
         if prior == Priority.ORDER:
             # Keep the provided configuration order unless ORDER is explicitly requested
             return list(streamers_index)
@@ -1969,7 +2002,11 @@ class Twitch(object):
             self._last_selection_was_streak = False
             self._last_streak_selection = set()
 
-        remaining_priorities = priority[:] if priority else []
+        # Streak slots were assigned above. Sorting the other slots by STREAK
+        # again would bypass watch_streak_max_parallel and starve drops.
+        remaining_priorities = [
+            prior for prior in (priority or []) if prior != Priority.STREAK
+        ]
         if not remaining_priorities:
             remaining_priorities = [Priority.ORDER]
 
@@ -2650,7 +2687,7 @@ class Twitch(object):
                             "send_minute_watched_connection_error",
                             "Error while trying to send minute watched for %s: %s",
                             streamers[index].username,
-                            e,
+                            type(e).__name__,
                         )
                         self.__check_connection_handler(chunk_size)
                     except requests.exceptions.Timeout as e:
@@ -2659,7 +2696,7 @@ class Twitch(object):
                             "send_minute_watched_timeout",
                             "Timeout while trying to send minute watched for %s: %s",
                             streamers[index].username,
-                            e,
+                            type(e).__name__,
                         )
 
                     self.__chuncked_sleep(
@@ -2712,7 +2749,7 @@ class Twitch(object):
         streamer.channel_points_context_at = time.time()
 
         community_points = (
-            channel.get("self", {}).get("communityPoints")
+            (channel.get("self") or {}).get("communityPoints")
             if isinstance(channel, dict)
             else None
         )
@@ -2725,7 +2762,7 @@ class Twitch(object):
             is_enabled = community_points_settings.get("isEnabled")
             if isinstance(is_enabled, bool):
                 streamer.channel_points_enabled = is_enabled
-        if community_points is None:
+        if not isinstance(community_points, dict):
             return
 
         streamer.channel_points = community_points.get("balance", streamer.channel_points)
@@ -2748,7 +2785,7 @@ class Twitch(object):
             pass
 
         if streamer.settings.community_goals is True:
-            goals = channel.get("communityPointsSettings", {}).get("goals", [])
+            goals = (community_points_settings or {}).get("goals") or []
             streamer.community_goals = {
                 goal["id"]: CommunityGoal.from_gql(goal)
                 for goal in goals
@@ -2809,6 +2846,8 @@ class Twitch(object):
         return failed_streamers
 
     def make_predictions(self, event):
+        if not self.running:
+            return
         decision = event.bet.calculate(event.streamer.channel_points)
         # selector_index = 0 if decision["choice"] == "A" else 1
 
@@ -2981,7 +3020,7 @@ class Twitch(object):
         if self._log_gql_errors(json_data.get("operationName"), response):
             return []
         channel = (
-            response.get("data", {}).get("channel", {})
+            (response.get("data") or {}).get("channel", {})
             if isinstance(response, dict)
             else {}
         )
@@ -3003,12 +3042,9 @@ class Twitch(object):
             return {}
         if not isinstance(response, dict):
             return {}
-        return (
-            response.get("data", {})
-            .get("currentUser", {})
-            .get("inventory", {})
-            or {}
-        )
+        return ((response.get("data") or {}).get("currentUser") or {}).get(
+            "inventory", {}
+        ) or {}
 
     def __get_drops_dashboard(self, status=None):
         json_data = GQLOperations.ViewerDropsDashboard
@@ -3016,9 +3052,9 @@ class Twitch(object):
         if self._log_gql_errors(json_data.get("operationName"), response):
             return []
         campaigns = (
-            response.get("data", {})
-            .get("currentUser", {})
-            .get("dropCampaigns", [])
+            ((response.get("data") or {}).get("currentUser") or {}).get(
+                "dropCampaigns", []
+            )
             if isinstance(response, dict)
             else []
         ) or []
@@ -3054,7 +3090,7 @@ class Twitch(object):
                 if self._log_gql_errors(operation_name, r):
                     continue
                 drop_campaign = (
-                    r.get("data", {}).get("user", {}).get("dropCampaign", None)
+                    ((r.get("data") or {}).get("user") or {}).get("dropCampaign")
                     if isinstance(r, dict)
                     else None
                 )
@@ -3219,6 +3255,24 @@ class Twitch(object):
                     campaigns_details = self.__get_campaigns_details(
                         self.__get_drops_dashboard(status="ACTIVE")
                     )
+                    # Inventory can still expose active campaigns when Twitch
+                    # returns null dashboard entries or campaign details.
+                    inventory = self.__get_inventory()
+                    discovered_ids = {campaign["id"] for campaign in campaigns_details}
+                    inventory_campaigns = inventory.get("dropCampaignsInProgress") or []
+                    fallback_campaigns = [
+                        campaign
+                        for campaign in inventory_campaigns
+                        if isinstance(campaign, dict)
+                        and campaign.get("status") == "ACTIVE"
+                        and campaign.get("id") not in discovered_ids
+                    ]
+                    campaigns_details.extend(fallback_campaigns)
+                    if fallback_campaigns:
+                        logger.info(
+                            "Using %d active drop campaign(s) from inventory",
+                            len(fallback_campaigns),
+                        )
                     campaigns = []
 
                     # Going to clear array and structure. Remove all the timeBasedDrops expired or not started yet
@@ -3251,7 +3305,12 @@ class Twitch(object):
                         if self._campaign_matches_streamer(campaign, streamers[i])
                     ]
 
-            except (ValueError, KeyError, requests.exceptions.ConnectionError) as e:
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                requests.exceptions.RequestException,
+            ) as e:
                 logger.error(f"Error while syncing inventory: {e}")
                 campaigns = []
                 self.__check_connection_handler(chunk_size)

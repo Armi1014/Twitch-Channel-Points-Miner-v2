@@ -33,11 +33,13 @@ def float_round(number, ndigits=2):
 
 def server_time(message_data):
     return (
-        datetime.fromtimestamp(
-            message_data["server_time"], timezone.utc).isoformat()
-        + "Z"
+        datetime.fromtimestamp(message_data["server_time"], timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
         if message_data is not None and "server_time" in message_data
-        else datetime.fromtimestamp(time.time(), timezone.utc).isoformat() + "Z"
+        else datetime.fromtimestamp(time.time(), timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
 
 
@@ -173,8 +175,8 @@ def set_default_settings(settings, defaults):
 
 def internet_connection_available(host="8.8.8.8", port=53, timeout=3):
     try:
-        socket.setdefaulttimeout(timeout)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
         return True
     except socket.error:
         return False
@@ -193,12 +195,15 @@ def combine(*iterables):
 
 
 def download_file(name, fpath):
-    r = requests.get(
-        path.join(GITHUB_url, name),
+    name = name.replace("\\", "/").lstrip("/")
+    with requests.get(
+        f"{GITHUB_url.rstrip('/')}/{name}",
         headers={"User-Agent": get_user_agent("FIREFOX")},
         stream=True,
-    )
-    if r.status_code == 200:
+        timeout=20,
+    ) as r:
+        if r.status_code != 200:
+            return False
         with open(fpath, "wb") as f:
             for chunk in r.iter_content(chunk_size=1024):
                 if chunk:
@@ -242,7 +247,7 @@ def dump_json(path: str, data):
         import json
         import os
 
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception:

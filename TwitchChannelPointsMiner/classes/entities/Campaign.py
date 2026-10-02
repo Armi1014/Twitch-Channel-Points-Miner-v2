@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
 from TwitchChannelPointsMiner.classes.Settings import Settings
@@ -43,7 +43,11 @@ class Campaign(object):
 
         self.end_at = parse_datetime(dict["endAt"])
         self.start_at = parse_datetime(dict["startAt"])
-        self.dt_match = self.start_at < datetime.now() < self.end_at
+        self.dt_match = (
+            self.start_at
+            <= datetime.now(timezone.utc).replace(tzinfo=None)
+            < self.end_at
+        )
 
         self.drops = list(map(lambda x: Drop(x), dict["timeBasedDrops"]))
 
@@ -52,12 +56,15 @@ class Campaign(object):
 
     def __str__(self):
         return (
-            f"{self.name}, Game: {self.game['displayName']} - Drops: {len(self.drops)} pcs. - In inventory: {self.in_inventory}"
+            f"{self.name}, Game: {self.game.get('displayName') or self.game.get('name', 'Unknown')} - Drops: {len(self.drops)} pcs. - In inventory: {self.in_inventory}"
             if Settings.logger.less
             else self.__repr__()
         )
 
     def clear_drops(self):
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        for drop in self.drops:
+            drop.dt_match = drop.start_at <= now < drop.end_at
         self.drops = list(
             filter(lambda x: x.dt_match is True and x.is_claimed is False, self.drops)
         )
@@ -77,7 +84,7 @@ class Campaign(object):
             for i in range(len(self.drops)):
                 current_id = self.drops[i].id
                 if drop.get("id") == current_id:
-                    progress = drop.get("self", {})
+                    progress = drop.get("self") or {}
                     self.drops[i].update(progress)
                     updated = self.drops[i].current_minutes_watched
                     if Settings.logger.console_level <= logging.DEBUG:

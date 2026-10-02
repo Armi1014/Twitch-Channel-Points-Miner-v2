@@ -9,7 +9,10 @@ from TwitchChannelPointsMiner.classes.entities.Message import Message
 from TwitchChannelPointsMiner.classes.websocket.Pool import WebSocketPool
 from TwitchChannelPointsMiner.classes.websocket.pubsub.Client import PubSubWebSocket
 from TwitchChannelPointsMiner.constants import WEBSOCKET
-from TwitchChannelPointsMiner.utils import internet_connection_available
+from TwitchChannelPointsMiner.utils import (
+    internet_connection_available,
+    interruptible_sleep,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,8 @@ class PubSubWebSocketPool(WebSocketPool):
         logger.debug("Starting PubSub WebSocket Pool")
 
     def submit(self, topic):
+        if self.forced_close:
+            return
         if self.ws == [] or len(self.ws[-1].topics) >= 50:
             self.ws.append(self.__new(len(self.ws)))
             self.__start(-1)
@@ -184,20 +189,25 @@ class PubSubWebSocketPool(WebSocketPool):
                 logger.info(
                     f"#{ws.index} - Reconnecting to Twitch PubSub server in ~60 seconds"
                 )
-                time.sleep(30)
+                self = ws.parent_pool
+                running = lambda: not ws.forced_close and not self.forced_close
+                interruptible_sleep(running, 30)
 
-                while internet_connection_available() is False:
+                while running() and internet_connection_available() is False:
                     random_sleep = random.randint(1, 3)
                     logger.warning(
                         f"#{ws.index} - No internet connection available! Retry after {random_sleep}m"
                     )
-                    time.sleep(random_sleep * 60)
+                    interruptible_sleep(running, random_sleep * 60)
 
-                self = ws.parent_pool
+                if not running():
+                    return
                 self.ws[ws.index] = self.__new(ws.index)
 
                 self.__start(ws.index)
-                time.sleep(30)
+                interruptible_sleep(running, 30)
+                if not running():
+                    return
 
                 for topic in ws.topics:
                     self.__submit(ws.index, topic)

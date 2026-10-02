@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.utils import percentage
@@ -18,6 +18,7 @@ class Drop(object):
         "benefit",
         "minutes_required",
         "requires_subscription",
+        "required_subs",
         "has_preconditions_met",
         "current_minutes_watched",
         "drop_instance_id",
@@ -38,6 +39,7 @@ class Drop(object):
         )
         self.minutes_required = dict["requiredMinutesWatched"]
         self.requires_subscription = self.__parse_requires_subscription(dict)
+        self.required_subs = int(dict.get("requiredSubs") or 0)
 
         self.has_preconditions_met = None  # [True, False], None we don't know
         self.current_minutes_watched = 0
@@ -49,7 +51,11 @@ class Drop(object):
 
         self.end_at = parse_datetime(dict["endAt"])
         self.start_at = parse_datetime(dict["startAt"])
-        self.dt_match = self.start_at < datetime.now() < self.end_at
+        self.dt_match = (
+            self.start_at
+            <= datetime.now(timezone.utc).replace(tzinfo=None)
+            < self.end_at
+        )
 
     def update(
         self,
@@ -83,7 +89,11 @@ class Drop(object):
         self.drop_instance_id = progress.get("dropInstanceID")
         self.is_claimed = progress.get("isClaimed", False)
         self.is_claimable = (
-            self.is_claimed is False and self.drop_instance_id is not None
+            self.is_claimed is False
+            and self.drop_instance_id is not None
+            and (self.required_subs == 0 or self.has_preconditions_met is True)
+            and self.has_preconditions_met is not False
+            and self.current_minutes_watched >= self.minutes_required
         )
         self.percentage_progress = updated_percentage
 
@@ -104,7 +114,7 @@ class Drop(object):
                 continue
             benefit = edge.get("benefit") if isinstance(edge.get("benefit"), dict) else {}
             benefit_type = benefit.get("type") or benefit.get("name") or ""
-            if isinstance(benefit_type, str) and "SUB" in benefit_type.upper():
+            if isinstance(benefit_type, str) and "SUBSCRIBER" in benefit_type.upper():
                 return True
 
         return bool(drop_dict.get("isSubscriptionOnly") or drop_dict.get("subscriberOnly"))

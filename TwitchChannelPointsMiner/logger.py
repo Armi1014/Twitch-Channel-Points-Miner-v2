@@ -9,6 +9,7 @@ from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandl
 from pathlib import Path
 
 import emoji
+import requests
 from colorama import Fore, init
 
 from TwitchChannelPointsMiner.classes.Discord import Discord
@@ -188,15 +189,24 @@ class GlobalFormatter(logging.Formatter):
             # Full remove using a method from utils.
             record.msg = remove_emoji(record.msg)
 
-        record.msg = self.settings.username + record.msg
+        record.msg = (self.settings.username or "") + record.msg
 
         if hasattr(record, "event"):
-            self.telegram(record)
-            self.discord(record)
-            self.webhook(record)
-            self.matrix(record)
-            self.pushover(record)
-            self.gotify(record)
+            for service in (
+                "telegram",
+                "discord",
+                "webhook",
+                "matrix",
+                "pushover",
+                "gotify",
+            ):
+                try:
+                    getattr(self, service)(record)
+                except (requests.exceptions.RequestException, ValueError) as exc:
+                    # Request exceptions can include credential-bearing URLs.
+                    logging.getLogger(__name__).warning(
+                        "%s notification failed (%s)", service, type(exc).__name__
+                    )
 
             if self.settings.colored is True:
                 record.msg = (

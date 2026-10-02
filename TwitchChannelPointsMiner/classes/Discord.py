@@ -21,4 +21,5 @@ class Discord(object):
                     "username": "Twitch Channel Points Miner",
                     "avatar_url": "https://i.imgur.com/X9fEkhT.png",
                 },
-            )
+                timeout=20,
+            ).raise_for_status()

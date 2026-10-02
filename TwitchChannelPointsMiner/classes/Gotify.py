@@ -16,8 +16,6 @@ class Gotify(object):
         if str(event) in self.events:
             requests.post(
                 url=self.endpoint,
-                data={
-                    "message": dedent(message),
-                    "priority": self.priority
-                },
-            )
+                data={"message": dedent(message), "priority": self.priority},
+                timeout=20,
+            ).raise_for_status()

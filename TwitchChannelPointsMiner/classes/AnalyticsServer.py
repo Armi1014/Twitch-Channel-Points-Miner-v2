@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Thread
 
@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 def streamers_available():
     path = Settings.analytics_path
+    if not os.path.isdir(path):
+        return []
     return [
         f
         for f in os.listdir(path)
@@ -43,61 +45,48 @@ def aggregate(df, freq="30Min"):
 def filter_datas(start_date, end_date, datas):
     # Note: https://stackoverflow.com/questions/4676195/why-do-i-need-to-multiply-unix-timestamps-by-1000-in-javascript
     start_date = (
-        datetime.strptime(start_date, "%Y-%m-%d").timestamp() * 1000
+        datetime.strptime(start_date, "%Y-%m-%d")
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+        * 1000
         if start_date is not None
         else 0
     )
     end_date = (
         datetime.strptime(end_date, "%Y-%m-%d")
         if end_date is not None
-        else datetime.now()
-    ).replace(hour=23, minute=59, second=59).timestamp() * 1000
+        else datetime.now(timezone.utc)
+    ).replace(
+        hour=23, minute=59, second=59, microsecond=999000, tzinfo=timezone.utc
+    ).timestamp() * 1000
+    if start_date > end_date:
+        raise ValueError("startDate must not be after endDate")
 
-    original_series = datas["series"]
-
-    if "series" in datas:
-        df = pd.DataFrame(datas["series"])
-        df["datetime"] = pd.to_datetime(df.x // 1000, unit="s")
-
-        df = df[(df.x >= start_date) & (df.x <= end_date)]
-
-        datas["series"] = (
-            df.drop(columns="datetime")
-            .sort_values(by=["x", "y"], ascending=True)
-            .to_dict("records")
-        )
-    else:
-        datas["series"] = []
+    original_series = datas.get("series") or []
+    datas["series"] = sorted(
+        [point for point in original_series if start_date <= point["x"] <= end_date],
+        key=lambda point: (point["x"], point["y"]),
+    )
 
     # If no data is found within the timeframe, that usually means the streamer hasn't streamed within that timeframe
     # We create a series that shows up as a straight line on the dashboard, with 'No Stream' as labels
     if len(datas["series"]) == 0:
-        new_end_date = start_date
-        new_start_date = 0
-        df = pd.DataFrame(original_series)
-        df["datetime"] = pd.to_datetime(df.x // 1000, unit="s")
+        previous = [point for point in original_series if point["x"] < start_date]
+        if previous:
+            last_balance = max(previous, key=lambda point: point["x"])["y"]
+            datas["series"] = [
+                {"x": start_date, "y": last_balance, "z": "No Stream"},
+                {"x": end_date, "y": last_balance, "z": "No Stream"},
+            ]
 
-        # Attempt to get the last known balance from before the provided timeframe
-        df = df[(df.x >= new_start_date) & (df.x <= new_end_date)]
-        last_balance = df.drop(columns="datetime").sort_values(
-            by=["x", "y"], ascending=True).to_dict("records")[-1]['y']
-
-        datas["series"] = [{'x': start_date, 'y': last_balance, 'z': 'No Stream'}, {
-            'x': end_date, 'y': last_balance, 'z': 'No Stream'}]
-
-    if "annotations" in datas:
-        df = pd.DataFrame(datas["annotations"])
-        df["datetime"] = pd.to_datetime(df.x // 1000, unit="s")
-
-        df = df[(df.x >= start_date) & (df.x <= end_date)]
-
-        datas["annotations"] = (
-            df.drop(columns="datetime")
-            .sort_values(by="x", ascending=True)
-            .to_dict("records")
-        )
-    else:
-        datas["annotations"] = []
+    datas["annotations"] = sorted(
+        [
+            point
+            for point in datas.get("annotations") or []
+            if start_date <= point["x"] <= end_date
+        ],
+        key=lambda point: point["x"],
+    )
 
     return datas
 
@@ -107,6 +96,13 @@ def read_json(streamer, return_response=True):
     end_date = request.args.get("endDate", type=str)
 
     path = Settings.analytics_path
+    if "/" in streamer or "\\" in streamer or streamer in {".", ".."}:
+        error = {"error": "Invalid streamer name"}
+        return (
+            Response(json.dumps(error), status=400, mimetype="application/json")
+            if return_response
+            else error
+        )
     streamer = streamer if streamer.endswith(".json") else f"{streamer}.json"
 
     # Check if the file exists before attempting to read it
@@ -130,7 +126,15 @@ def read_json(streamer, return_response=True):
             return {"error": error_message}
 
     # Handle filtering data, if applicable
-    filtered_data = filter_datas(start_date, end_date, data)
+    try:
+        filtered_data = filter_datas(start_date, end_date, data)
+    except ValueError as exc:
+        error = {"error": str(exc)}
+        return (
+            Response(json.dumps(error), status=400, mimetype="application/json")
+            if return_response
+            else error
+        )
     if return_response:
         return Response(json.dumps(filtered_data), status=200, mimetype="application/json")
     else:
@@ -156,7 +160,7 @@ def json_all():
         json.dumps(
             [
                 {
-                    "name": streamer.strip(".json"),
+                    "name": streamer.removesuffix(".json"),
                     "data": read_json(streamer, return_response=False),
                 }
                 for streamer in streamers_available()
@@ -222,16 +226,16 @@ def check_assets():
                 download_assets(assets_folder, required_files)
                 break
 
-last_sent_log_index = 0
-
 class AnalyticsServer(Thread):
+
     def __init__(
         self,
         host: str = "127.0.0.1",
         port: int = 5000,
         refresh: int = 5,
         days_ago: int = 7,
-        username: str = None
+        username: str = None,
+        log_file_path: str | None = None,
     ):
         super(AnalyticsServer, self).__init__()
 
@@ -244,22 +248,28 @@ class AnalyticsServer(Thread):
         self.username = username
 
         def generate_log():
-            global last_sent_log_index  # Use the global variable
-
             # Get the last received log index from the client request parameters
-            last_received_index = int(request.args.get("lastIndex", last_sent_log_index))
+            last_received_index = max(0, request.args.get("lastIndex", 0, type=int))
 
             logs_path = os.path.join(Path().absolute(), "logs")
-            log_file_path = os.path.join(logs_path, f"{username}.log")
+            current_log_path = log_file_path or os.path.join(
+                logs_path, f"{username}.log"
+            )
             try:
-                with open(log_file_path, "r", encoding="utf-8") as log_file:
+                with open(current_log_path, "r", encoding="utf-8") as log_file:
                     log_content = log_file.read()
 
                 # Extract new log entries since the last received index
+                if last_received_index > len(log_content):
+                    last_received_index = 0  # The log was rotated or truncated.
                 new_log_entries = log_content[last_received_index:]
-                last_sent_log_index = len(log_content)  # Update the last sent index
 
-                return Response(new_log_entries, status=200, mimetype="text/plain")
+                return Response(
+                    new_log_entries,
+                    status=200,
+                    mimetype="text/plain",
+                    headers={"X-Log-Index": str(len(log_content))},
+                )
 
             except FileNotFoundError:
                 return Response("Log file not found.", status=404, mimetype="text/plain")

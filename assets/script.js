@@ -113,14 +113,14 @@ $(document).ready(function () {
     // Function to get the full log content
     function getLog() {
         if (isLogCheckboxChecked) {
-            $.get(`/log?lastIndex=${lastReceivedLogIndex}`, function (data) {
+            $.get(`/log?lastIndex=${lastReceivedLogIndex}`, function (data, status, xhr) {
                 // Process and display the new log entries received
-                $("#log-content").append(data);
+                $("#log-content").append(document.createTextNode(data));
                 // Scroll to the bottom of the log content
                 $("#log-content").scrollTop($("#log-content")[0].scrollHeight);
 
                 // Update the last received log index
-                lastReceivedLogIndex += data.length;
+                lastReceivedLogIndex = Number(xhr.getResponseHeader('X-Log-Index'));
 
                 if (autoUpdateLog) {
                     // Call getLog() again after a certain interval (e.g., 1 second)

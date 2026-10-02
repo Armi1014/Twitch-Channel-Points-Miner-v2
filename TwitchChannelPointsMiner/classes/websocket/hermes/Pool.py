@@ -1,7 +1,6 @@
 import logging
 import random
 import threading
-import time
 
 from websocket import WebSocketConnectionClosedException
 
@@ -16,7 +15,10 @@ from TwitchChannelPointsMiner.classes.websocket.hermes.data.response import (
     NotificationResponse,
 )
 from TwitchChannelPointsMiner.classes.entities.Message import Message
-from TwitchChannelPointsMiner.utils import internet_connection_available
+from TwitchChannelPointsMiner.utils import (
+    internet_connection_available,
+    interruptible_sleep,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,8 @@ class HermesWebSocketPool(WebSocketPool, HermesWebSocketListener):
             return
 
         with self.__lock:
+            if self.force_close:
+                return
             if self.__subscribed(topic):
                 logger.debug("Already subscribed to topic, %s", topic)
             else:
@@ -103,7 +107,6 @@ class HermesWebSocketPool(WebSocketPool, HermesWebSocketListener):
 
     def __reconnect(self, client: HermesClient):
         with self.__lock:
-            client.close()
             if self.force_close:
                 return
             if client.index >= len(self.clients):
@@ -116,16 +119,19 @@ class HermesWebSocketPool(WebSocketPool, HermesWebSocketListener):
                 client.all_topics(),
                 client.index,
             )
+        # close() can synchronously invoke on_close; replace the client first
+        # and release the pool lock so that callback cannot deadlock.
+        client.close()
         logger.debug("%s - Reconnecting to Twitch Hermes server in ~30 seconds", client.describe())
-        time.sleep(30)
-        while not internet_connection_available() and not self.force_close:
+        interruptible_sleep(lambda: not self.force_close, 30)
+        while not self.force_close and not internet_connection_available():
             random_sleep = random.randint(1, 3)
             logger.warning(
                 "%s - No internet connection available! Retrying websocket reconnection after %sm",
                 client.describe(),
                 random_sleep,
             )
-            time.sleep(random_sleep * 60)
+            interruptible_sleep(lambda: not self.force_close, random_sleep * 60)
         if not self.force_close:
             new_client.open()
 
@@ -218,16 +224,17 @@ class HermesWebSocketPool(WebSocketPool, HermesWebSocketListener):
         logger.debug("Closing Hermes WebSocket Pool")
         self.force_close = True
         with self.__lock:
-            for client in self.clients:
-                try:
-                    client.close()
-                except Exception as exc:
-                    logger.error(
-                        "%s - Error closing client",
-                        client.describe(),
-                        exc_info=exc,
-                    )
+            clients = list(self.clients)
             self.clients.clear()
+        for client in clients:
+            try:
+                client.close()
+            except Exception as exc:
+                logger.error(
+                    "%s - Error closing client",
+                    client.describe(),
+                    exc_info=exc,
+                )
 
     def check_stale_connections(self):
         logger.debug("Checking stale connections")

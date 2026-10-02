@@ -174,15 +174,27 @@ class HermesClient(WebSocketApp):
 
     def subscribe_now(self, topic):
         request = SubscribePubSubRequest.create(topic)
-        if self.send_request(request):
-            self.subscriptions[request.subscribe.id] = (topic, request)
-            return True
+        # Register before sending: a response can arrive on the reader thread
+        # before send_request returns.
+        self.subscriptions[request.subscribe.id] = (topic, request)
+        try:
+            if self.send_request(request):
+                return True
+        except Exception:
+            self.subscriptions.pop(request.subscribe.id, None)
+            raise
+        self.subscriptions.pop(request.subscribe.id, None)
         return False
 
     def subscribe(self, topic):
         with self.pending_topics_lock:
             if self.state == State.OPEN:
-                self.subscribe_now(topic)
+                try:
+                    if not self.subscribe_now(topic):
+                        self.pending_topics.append(topic)
+                except Exception:
+                    self.pending_topics.append(topic)
+                    raise
             else:
                 self.pending_topics.append(topic)
 
@@ -247,7 +259,9 @@ class HermesClient(WebSocketApp):
             while len(self.pending_topics) > 0:
                 topic = self.pending_topics.pop()
                 try:
-                    self.subscribe_now(topic)
+                    if not self.subscribe_now(topic):
+                        self.pending_topics.append(topic)
+                        return
                 except Exception:
                     self.pending_topics.append(topic)
                     raise

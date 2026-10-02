@@ -74,6 +74,37 @@ This matters because Twitch can send misleading streak signals. The miner keeps 
 
 More streak details are in [FAQ.md](FAQ.md).
 
+## Weekly Rewards And Streak Recovery
+
+Weekly visits and missed-stream recovery are enabled by default, adapted from
+[mpforce1's fork](https://github.com/mpforce1/Twitch-Channel-Points-Miner).
+One background worker tries a clip first, then an accessible VOD for offline
+channels. Successful playback requests alone never count as success: Twitch
+must confirm the visit or restored streak.
+
+- Weekly visits run only when Twitch reports an active event for your account
+  and channel, with an unearned visit today. Completed or expired events stay
+  idle. `Priority.WEEKLY_REWARDS` prioritizes eligible live channels; put it after
+  `Priority.DROPS` to keep drop progress first.
+- Recovery requires a streak of at least three broadcasts and an unexpired
+  recovery window reported by Twitch. Only clips/VODs from the missed broadcast
+  qualify. Recovery preserves the previous count and never claims the current
+  live broadcast. Live channels continue through the normal streak watcher.
+- Attempts are limited to 30 seconds for a clip and eight minutes for a VOD,
+  with one job at a time and a one-hour cooldown per unsuccessful job. Deleted,
+  unavailable, and subscriber-only VODs are skipped.
+
+Disable either feature globally with `TwitchChannelPointsMiner(...,
+weekly_rewards=False, watch_streak_recovery=False)`, or per channel with
+`StreamerSettings(weekly_rewards=False, watch_streak_recovery=False)`.
+Advanced limits use `RewardAutomationSettings` from
+`TwitchChannelPointsMiner.classes.RewardAutomation`, passed as
+`reward_automation_settings=RewardAutomationSettings(...)`.
+
+These features depend on Twitch's eligibility and private APIs. See Twitch's
+[weekly rewards rules](https://help.twitch.tv/s/article/weekly-rewards) and
+[watch streak recovery rules](https://help.twitch.tv/s/article/recover-watch-streaks).
+
 ## Drops
 
 Drops depend on two things:

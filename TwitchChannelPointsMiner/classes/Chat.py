@@ -1,7 +1,8 @@
 import logging
+import socket
 import time
 from enum import Enum, auto
-from threading import Thread
+from threading import Event, Thread
 
 from irc.bot import SingleServerIRCBot
 
@@ -30,15 +31,22 @@ class ChatPresence(Enum):
 
 
 class ClientIRC(SingleServerIRCBot):
-    def __init__(self, username, token, streamer):
+
+    def __init__(self, username, token, streamer, stop_event=None):
         self.token = token
         self.streamer = streamer
         self.channel_name = self._get_channel_name(streamer)
         self.channel = "#" + self.channel_name
         self.__active = False
+        self.stop_event = stop_event if stop_event is not None else Event()
 
         super(ClientIRC, self).__init__(
-            [(IRC, IRC_PORT, f"oauth:{token}")], username, username
+            [(IRC, IRC_PORT, f"oauth:{token}")],
+            username,
+            username,
+            connect_factory=lambda address: socket.create_connection(
+                address, timeout=20
+            ),
         )
 
     @staticmethod
@@ -167,9 +175,11 @@ class ClientIRC(SingleServerIRCBot):
         return build_subscription_dedupe_key(**context)
 
     def start(self):
+        if self.stop_event.is_set():
+            return
         self.__active = True
         self._connect()
-        while self.__active:
+        while self.__active and not self.stop_event.is_set():
             try:
                 self.reactor.process_once(timeout=0.2)
                 time.sleep(0.01)
@@ -185,8 +195,9 @@ class ClientIRC(SingleServerIRCBot):
                     pass
 
     def die(self, msg="Bye, cruel world!"):
-        self.connection.disconnect(msg)
+        self.stop_event.set()
         self.__active = False
+        self.connection.disconnect(msg)
 
     """
     def on_join(self, connection, event):
@@ -246,15 +257,24 @@ class ThreadChat(Thread):
         self.channel = ClientIRC._get_channel_name(streamer)
 
         self.chat_irc = None
+        self._stop_requested = Event()
 
     def run(self):
-        self.chat_irc = ClientIRC(self.username, self.token, self.streamer)
+        if self._stop_requested.is_set():
+            return
+        self.chat_irc = ClientIRC(
+            self.username, self.token, self.streamer, stop_event=self._stop_requested
+        )
         logger.info(
             f"Join IRC Chat: {self.channel}", extra={"emoji": ":speech_balloon:"}
         )
-        self.chat_irc.start()
+        try:
+            self.chat_irc.start()
+        finally:
+            self.chat_irc.die()
 
     def stop(self):
+        self._stop_requested.set()
         if self.chat_irc is not None:
             logger.info(
                 f"Leave IRC Chat: {self.channel}", extra={"emoji": ":speech_balloon:"}

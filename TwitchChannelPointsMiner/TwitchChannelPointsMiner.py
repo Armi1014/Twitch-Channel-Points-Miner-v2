@@ -24,6 +24,10 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.PubSub import PubSubHandler
+from TwitchChannelPointsMiner.classes.RewardAutomation import (
+    RewardAutomation,
+    RewardAutomationSettings,
+)
 from TwitchChannelPointsMiner.classes.entities.PubsubTopic import PubsubTopic
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
@@ -70,6 +74,7 @@ from TwitchChannelPointsMiner.utils import (
 #   - irc.client - [_handle_message]
 logging.getLogger("chardet.charsetprober").setLevel(logging.ERROR)
 logging.getLogger("requests").setLevel(logging.ERROR)
+logging.getLogger("urllib3").setLevel(logging.ERROR)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 logging.getLogger("irc.client").setLevel(logging.ERROR)
 logging.getLogger("seleniumwire").setLevel(logging.ERROR)
@@ -129,6 +134,10 @@ class TwitchChannelPointsMiner:
         "events_predictions",
         "minute_watcher_thread",
         "sync_campaigns_thread",
+        "reward_automation_thread",
+        "reward_automation_settings",
+        "weekly_rewards",
+        "watch_streak_recovery",
         "ws_pool",
         "session_id",
         "running",
@@ -185,6 +194,9 @@ class TwitchChannelPointsMiner:
         weekly_reports: bool = False,
         monthly_reports: bool = False,
         yearly_reports: bool = False,
+        weekly_rewards: bool = True,
+        watch_streak_recovery: bool = True,
+        reward_automation_settings: RewardAutomationSettings | None = None,
     ):
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
@@ -249,6 +261,15 @@ class TwitchChannelPointsMiner:
 
         self.claim_drops_startup = claim_drops_startup
         self.use_hermes = use_hermes
+        self.weekly_rewards = bool(weekly_rewards)
+        self.watch_streak_recovery = bool(watch_streak_recovery)
+        if reward_automation_settings is not None and not isinstance(
+            reward_automation_settings, RewardAutomationSettings
+        ):
+            raise TypeError("reward_automation_settings must be RewardAutomationSettings")
+        self.reward_automation_settings = (
+            reward_automation_settings or RewardAutomationSettings()
+        )
         safe_account_name = "".join(
             ch if (ch.isalnum() or ch in "._-") else "_"
             for ch in self.username.lower()
@@ -301,7 +322,12 @@ class TwitchChannelPointsMiner:
             self.subscription_notification_cache_path
         )
         if priority is None:
-            self.priority = [Priority.STREAK, Priority.DROPS, Priority.ORDER]
+            self.priority = [
+                Priority.STREAK,
+                Priority.DROPS,
+                Priority.WEEKLY_REWARDS,
+                Priority.ORDER,
+            ]
         elif isinstance(priority, Priority):
             self.priority = [priority]
         else:
@@ -311,6 +337,7 @@ class TwitchChannelPointsMiner:
         self.events_predictions = {}
         self.minute_watcher_thread = None
         self.sync_campaigns_thread = None
+        self.reward_automation_thread = None
         self.ws_pool = None
 
         self.session_id = str(uuid.uuid4())
@@ -359,6 +386,7 @@ class TwitchChannelPointsMiner:
                 refresh=refresh,
                 days_ago=days_ago,
                 username=self.username,
+                log_file_path=self.logs_file,
             )
             http_server.daemon = True
             http_server.name = "Analytics Thread"
@@ -1191,7 +1219,7 @@ class TwitchChannelPointsMiner:
         blacklist_input = list(blacklist) if blacklist is not None else []
 
         logger.info(f"Start session: '{self.session_id}'", extra={"emoji": ":bomb:"})
-        self.running = True
+        self.running = self.twitch.running = True
         self.start_datetime = datetime.now()
 
         try:
@@ -1214,6 +1242,8 @@ class TwitchChannelPointsMiner:
             def normalize_login(name: str) -> str:
                 return name.lower().strip().replace(" ", "")
 
+            blacklist_input = {normalize_login(str(name)) for name in blacklist_input}
+
             streamers_name: list = []
             streamers_dict: dict = {}
 
@@ -1223,8 +1253,9 @@ class TwitchChannelPointsMiner:
                     if isinstance(streamer, Streamer)
                     else normalize_login(str(streamer))
                 )
-                if username not in blacklist_input:
-                    streamers_name.append(username)
+                if username and username not in blacklist_input:
+                    if username not in streamers_dict:
+                        streamers_name.append(username)
                     streamers_dict[username] = streamer
 
             if followers is True:
@@ -1234,11 +1265,8 @@ class TwitchChannelPointsMiner:
                     extra={"emoji": ":clipboard:"},
                 )
                 for username in followers_array:
-                    if (
-                        username not in streamers_dict
-                        and normalize_login(username) not in blacklist_input
-                    ):
-                        norm = normalize_login(username)
+                    norm = normalize_login(username)
+                    if norm not in streamers_dict and norm not in blacklist_input:
                         streamers_name.append(norm)
                         streamers_dict[norm] = norm
 
@@ -1317,6 +1345,10 @@ class TwitchChannelPointsMiner:
                     logger.error("No valid streamers available after initialization.")
                     self.end(0, 0)
                     return
+
+            if not self.streamers:
+                logger.error("No valid streamers available after initialization.")
+                return
 
             if self.watch_streak_cache is not None:
                 snapshot_now = time.time()
@@ -1397,6 +1429,7 @@ class TwitchChannelPointsMiner:
             if not user_id:
                 logger.error("No user_id, exiting...")
                 self.end(0, 0)
+                return
 
             self.ws_pool.submit(
                 PubsubTopic(
@@ -1449,6 +1482,16 @@ class TwitchChannelPointsMiner:
                         PubsubTopic("community-points-channel-v1", streamer=streamer)
                     )
 
+            if self.weekly_rewards or self.watch_streak_recovery:
+                self.reward_automation_thread = RewardAutomation(
+                    self.twitch,
+                    self.streamers,
+                    weekly_rewards=self.weekly_rewards,
+                    watch_streak_recovery=self.watch_streak_recovery,
+                    settings=self.reward_automation_settings,
+                )
+                self.reward_automation_thread.start()
+
             refresh_context = time.time()
 
             while self.running:
@@ -1463,7 +1506,22 @@ class TwitchChannelPointsMiner:
                                 self.streamers[index]
                             )
         finally:
-            self.running = False
+            self.running = self.twitch.running = False
+            reward_worker = getattr(self, "reward_automation_thread", None)
+            if reward_worker is not None:
+                reward_worker.stop()
+            if self.ws_pool is not None:
+                self.ws_pool.end()
+            for streamer in self.streamers:
+                if streamer.irc_chat is not None:
+                    streamer.leave_chat()
+            for worker in (
+                self.minute_watcher_thread,
+                self.sync_campaigns_thread,
+                reward_worker,
+            ):
+                if worker is not None:
+                    worker.join()
             if self.streamers_export_thread is not None:
                 self.streamers_export_thread.join()
             self._export_streamers_snapshot()
@@ -1476,7 +1534,7 @@ class TwitchChannelPointsMiner:
     def end(self, signum, frame):
         if not self.running:
             return
-        
+
         logger.info("CTRL+C Detected! Please wait just a moment!")
 
         for streamer in self.streamers:
@@ -1489,6 +1547,10 @@ class TwitchChannelPointsMiner:
                     streamer.irc_chat.join()
 
         self.running = self.twitch.running = False
+        reward_worker = getattr(self, "reward_automation_thread", None)
+        if reward_worker is not None:
+            reward_worker.stop()
+            reward_worker.join()
         if self.ws_pool is not None:
             self.ws_pool.end()
 
@@ -1565,19 +1627,19 @@ class TwitchChannelPointsMiner:
                     self.streamers[streamer_index].channel_points
                     - self.original_streamers[streamer_index]
                 )
-                
+
                 from colorama import Fore
                 streamer_highlight = Fore.YELLOW
-                
+
                 streamer_gain = (
                     f"{streamer_highlight}{self.streamers[streamer_index]}{Fore.RESET}, Total Points Gained: {_millify(gained)}"
                     if Settings.logger.less
                     else f"{streamer_highlight}{repr(self.streamers[streamer_index])}{Fore.RESET}, Total Points Gained (after farming - before farming): {_millify(gained)}"
                 )
-                
+
                 indent = ' ' * 25
                 streamer_history = '\n'.join(f"{indent}{history}" for history in self.streamers[streamer_index].print_history().split('; ')) 
-                
+
                 logger.info(
                     f"{streamer_gain}\n{streamer_history}",
                     extra={"emoji": ":moneybag:"},

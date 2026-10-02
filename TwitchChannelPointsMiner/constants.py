@@ -42,6 +42,41 @@ GITHUB_url = GITHUB_RAW_BASE_URL + BRANCH
 class GQLOperations:
     url = "https://gql.twitch.tv/gql"
     integrity_url = "https://gql.twitch.tv/integrity"
+    # Replay/weekly operations used by mpforce1's fork.
+    WeeklyVisitRewardsQuery = {
+        "operationName": "WeeklyVisitRewardsQuery",
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "ce98e9db55db7e4abcc1f5ac65c933b73c58fa9c4c8afe3c5098a8ed79737a3c",
+            }
+        },
+    }
+    ClipsCards__User = {
+        "operationName": "ClipsCards__User",
+        "variables": {"criteria": {"filter": "ALL_TIME"}, "limit": 20},
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "1cd671bfa12cec480499c087319f26d21925e9695d1f80225aae6a4354f23088",
+            }
+        },
+    }
+    FilterableVideoTower_Videos = {
+        "operationName": "FilterableVideoTower_Videos",
+        "variables": {
+            "broadcastType": "ARCHIVE",
+            "includePreviewBlur": False,
+            "limit": 7,
+            "videoSort": "TIME",
+        },
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "67004f7881e65c297936f32c75246470629557a393788fb5a69d6d9a25a8fd5f",
+            }
+        },
+    }
     WithIsStreamLiveQuery = {
         "operationName": "WithIsStreamLiveQuery",
         "extensions": {

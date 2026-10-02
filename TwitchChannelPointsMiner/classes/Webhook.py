@@ -14,13 +14,17 @@ class Webhook(object):
         self.events = [str(e) for e in events]
 
     def send(self, message: str, event: Events) -> None:
-        
+
         if str(event) in self.events:
-            url = self.endpoint + f"?event_name={str(event)}&message={message}" 
-            
+            params = {"event_name": str(event), "message": dedent(message)}
+
             if self.method.lower() == "get":
-                requests.get(url=url)
+                requests.get(
+                    url=self.endpoint, params=params, timeout=20
+                ).raise_for_status()
             elif self.method.lower() == "post":
-                requests.post(url=url)
+                requests.post(
+                    url=self.endpoint, params=params, timeout=20
+                ).raise_for_status()
             else:
                 raise ValueError("Invalid method, use POST or GET")

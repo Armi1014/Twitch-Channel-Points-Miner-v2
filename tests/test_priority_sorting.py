@@ -1,14 +1,48 @@
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
-from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, StreamerSettings
+from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    Streamer,
+    StreamerSettings,
+)
 from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 
 
 class PrioritySortingTest(unittest.TestCase):
+    def test_streak_parallel_limit_leaves_remaining_slot_for_drops(self):
+        twitch = Twitch("test", "ua", watch_streak_max_parallel=1)
+        streamers = [
+            Streamer(name, StreamerSettings(watch_streak=True))
+            for name in ("active_streak", "pending_streak", "drop_channel")
+        ]
+        for streamer in streamers:
+            streamer.channel_points = 100
+        session = SimpleNamespace(next_retry_at=0, attempts=0)
+        with (
+            patch.object(Twitch, "_select_streak_streamers", return_value=[0]),
+            patch.object(Twitch, "_ensure_watch_streak_session", return_value=session),
+            patch.object(
+                Twitch,
+                "_session_is_eligible",
+                side_effect=lambda session, streamer, now: streamer.username
+                != "drop_channel",
+            ),
+            patch.object(
+                Streamer,
+                "drops_condition",
+                autospec=True,
+                side_effect=lambda streamer: streamer.username == "drop_channel",
+            ),
+        ):
+            selection = twitch._select_streamers_to_watch(
+                streamers, [0, 1, 2], [Priority.STREAK, Priority.DROPS, Priority.ORDER]
+            )
+        self.assertEqual(selection, [0, 2])
+
     def test_streak_selection_prefers_oldest_pending_stream_before_drops(self):
         twitch = Twitch("test", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="test")
@@ -40,7 +74,9 @@ class PrioritySortingTest(unittest.TestCase):
         streamers_index = list(range(len(streamers)))
 
         selection = twitch._select_streamers_to_watch(
-            streamers, streamers_index, [Priority.STREAK, Priority.DROPS, Priority.ORDER]
+            streamers,
+            streamers_index,
+            [Priority.STREAK, Priority.DROPS, Priority.ORDER],
         )
 
         selected_usernames = [streamers[i].username for i in selection]
@@ -60,7 +96,9 @@ class PrioritySortingTest(unittest.TestCase):
 
         now = 1_700_000_000
 
-        def make_streamer(username: str, *, favorite: bool, online_at: float) -> Streamer:
+        def make_streamer(
+            username: str, *, favorite: bool, online_at: float
+        ) -> Streamer:
             settings = StreamerSettings(
                 watch_streak=True,
                 favorite=favorite,
@@ -83,7 +121,9 @@ class PrioritySortingTest(unittest.TestCase):
             make_streamer("newer_favorite", favorite=True, online_at=now - 300),
         ]
 
-        with patch("TwitchChannelPointsMiner.classes.Twitch.time.time", return_value=now):
+        with patch(
+            "TwitchChannelPointsMiner.classes.Twitch.time.time", return_value=now
+        ):
             selection = twitch._select_streamers_to_watch(
                 streamers,
                 list(range(len(streamers))),

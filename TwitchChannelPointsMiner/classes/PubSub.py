@@ -180,7 +180,7 @@ class PubSubHandler(MessageListener):
                             if (
                                 bet_settings.minimum_points is None
                                 or streamer.channel_points
-                                > bet_settings.minimum_points
+                                >= bet_settings.minimum_points
                             ):
                                 self.events_predictions[event_id] = event
                                 start_after = event.closing_bet_after(current_tmsp)

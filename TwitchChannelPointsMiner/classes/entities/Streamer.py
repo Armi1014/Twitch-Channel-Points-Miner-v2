@@ -4,11 +4,15 @@ import os
 import time
 from datetime import datetime
 from enum import Enum
-from threading import Lock
+from threading import Lock, current_thread
 
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ThreadChat
 from TwitchChannelPointsMiner.classes.entities.Bet import BetSettings, DelayMode
 from TwitchChannelPointsMiner.classes.entities.Stream import Stream
+from TwitchChannelPointsMiner.classes.entities.Rewards import (
+    StreakRecovery,
+    WeeklyRewards,
+)
 from TwitchChannelPointsMiner.classes.Settings import Events, Settings
 from TwitchChannelPointsMiner.constants import URL
 from TwitchChannelPointsMiner.utils import _millify
@@ -45,6 +49,8 @@ class StreamerSettings(object):
         "claim_drops",
         "claim_moments",
         "watch_streak",
+        "weekly_rewards",
+        "watch_streak_recovery",
         "favorite",
         "points_limit",
         "community_goals",
@@ -66,12 +72,16 @@ class StreamerSettings(object):
         playback_simulation: PlaybackSimulationMode | str = None,
         bet: BetSettings = None,
         chat: ChatPresence = None,
+        weekly_rewards: bool = None,
+        watch_streak_recovery: bool = None,
     ):
         self.make_predictions = make_predictions
         self.follow_raid = follow_raid
         self.claim_drops = claim_drops
         self.claim_moments = claim_moments
         self.watch_streak = watch_streak
+        self.weekly_rewards = weekly_rewards
+        self.watch_streak_recovery = watch_streak_recovery
         self.favorite = favorite
         self.points_limit = points_limit
         self.community_goals = community_goals
@@ -90,6 +100,8 @@ class StreamerSettings(object):
             "claim_drops",
             "claim_moments",
             "watch_streak",
+            "weekly_rewards",
+            "watch_streak_recovery",
         ]:
             if getattr(self, name) is None:
                 setattr(self, name, True)
@@ -137,6 +149,8 @@ class Streamer(object):
         "watch_streak_cache_path",
         "watch_streak_account",
         "subscription_notification_cache_path",
+        "weekly_rewards",
+        "streak_recovery",
     ]
 
     def __init__(self, username, settings=None):
@@ -170,6 +184,30 @@ class Streamer(object):
         self.watch_streak_cache_path = ""
         self.watch_streak_account = None
         self.subscription_notification_cache_path = None
+        self.weekly_rewards: WeeklyRewards | None = None
+        self.streak_recovery: StreakRecovery | None = None
+
+    def missing_weekly_reward(self):
+        return (
+            self.settings is not None
+            and self.settings.weekly_rewards is True
+            and self.channel_points_enabled
+            and not self.chat_banned
+            and self.weekly_rewards is not None
+            and self.weekly_rewards.needs_visit()
+        )
+
+    def needs_watch_streak_recovery(self):
+        return (
+            self.settings is not None
+            and self.settings.watch_streak is True
+            and self.settings.watch_streak_recovery is True
+            and self.channel_points_enabled
+            and not self.chat_banned
+            and not self.is_online
+            and self.streak_recovery is not None
+            and self.streak_recovery.recoverable()
+        )
 
     def __repr__(self):
         return f"Streamer(username={self.username}, channel_id={self.channel_id}, channel_points={_millify(self.channel_points)})"
@@ -342,6 +380,8 @@ class Streamer(object):
             for drop in getattr(campaign, "drops", []) or []:
                 if drop.is_claimed or drop.dt_match is False:
                     continue
+                if getattr(drop, "required_subs", 0) > 0:
+                    continue
                 if drop.requires_subscription and not is_subscribed:
                     continue
                 return True
@@ -411,7 +451,10 @@ class Streamer(object):
 
     def leave_chat(self):
         if self.irc_chat is not None:
-            self.irc_chat.stop()
+            chat = self.irc_chat
+            chat.stop()
+            if chat.is_alive() and chat is not current_thread():
+                chat.join(timeout=25)
 
             # Recreate a new thread to start again
             # raise RuntimeError("threads can only be started once")
@@ -424,6 +467,10 @@ class Streamer(object):
     def __join_chat(self):
         if self.irc_chat is not None:
             if self.irc_chat.is_alive() is False:
+                if self.irc_chat.ident is not None:
+                    self.irc_chat = ThreadChat(
+                        self.irc_chat.username, self.irc_chat.token, self
+                    )
                 self.irc_chat.start()
 
     def toggle_chat(self):

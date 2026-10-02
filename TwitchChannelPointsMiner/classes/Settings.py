@@ -9,6 +9,7 @@ class Priority(Enum):
     SUBSCRIBED = auto()
     POINTS_ASCENDING = auto()
     POINTS_DESCENDING = auto()
+    WEEKLY_REWARDS = auto()
 
 
 class FollowersOrder(Enum):
