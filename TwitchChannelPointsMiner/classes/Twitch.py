@@ -2738,8 +2738,16 @@ class Twitch(object):
         response = self.post_gql_request(json_data)
         if not response or self._log_gql_errors(json_data.get("operationName"), response):
             return
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, dict):
+            # A transient API failure is not evidence that the channel is gone.
+            logger.warning(
+                "Invalid channel points response for %s; keeping existing context",
+                streamer.username,
+            )
+            return
         try:
-            channel = response["data"]["community"]["channel"]
+            channel = data["community"]["channel"]
         except (KeyError, TypeError):
             raise StreamerDoesNotExistException
 

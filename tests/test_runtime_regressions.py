@@ -20,7 +20,10 @@ from TwitchChannelPointsMiner.classes.AnalyticsServer import (
     streamers_available,
 )
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence, ClientIRC, ThreadChat
-from TwitchChannelPointsMiner.classes.Exceptions import BadCredentialsException
+from TwitchChannelPointsMiner.classes.Exceptions import (
+    BadCredentialsException,
+    StreamerDoesNotExistException,
+)
 from TwitchChannelPointsMiner.classes.Matrix import Matrix
 from TwitchChannelPointsMiner.classes.Settings import Events, Settings
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
@@ -458,6 +461,47 @@ class PlaybackAndApiRegressionTest(unittest.TestCase):
         ):
             self.twitch.load_channel_points_context(self.streamer)
         self.assertEqual(self.streamer.channel_points, 100)
+
+    def test_missing_point_context_data_preserves_cached_state_without_logging_payload(self):
+        self.streamer.channel_points = 100
+        self.streamer.channel_points_context_at = 123
+        payloads = (
+            {"data": None, "private_marker": "private-payload"},
+            {"private_marker": "private-payload"},
+            {"data": []},
+            [{"data": None}],
+        )
+        for payload in payloads:
+            with (
+                self.subTest(payload=payload),
+                patch.object(Twitch, "post_gql_request", return_value=payload),
+                self.assertLogs("TwitchChannelPointsMiner.classes.Twitch") as logs,
+            ):
+                self.twitch.load_channel_points_context(self.streamer)
+            self.assertEqual(self.streamer.channel_points, 100)
+            self.assertEqual(self.streamer.channel_points_context_at, 123)
+            self.assertNotIn("private-payload", " ".join(logs.output))
+
+    def test_transient_point_context_failure_does_not_remove_streamer_at_startup(self):
+        self.streamer.channel_points = 100
+        with (
+            patch.object(Twitch, "post_gql_request", return_value={"data": None}),
+            patch.object(Twitch, "check_streamer_online") as online_check,
+            patch("TwitchChannelPointsMiner.classes.Twitch.time.sleep"),
+        ):
+            failed = self.twitch.initialize_streamers_context([self.streamer])
+        self.assertEqual(failed, set())
+        online_check.assert_called_once_with(self.streamer)
+        self.assertEqual(self.streamer.channel_points, 100)
+
+    def test_explicit_missing_channel_still_raises(self):
+        with patch.object(
+            Twitch,
+            "post_gql_request",
+            return_value={"data": {"community": {"channel": None}}},
+        ):
+            with self.assertRaises(StreamerDoesNotExistException):
+                self.twitch.load_channel_points_context(self.streamer)
 
     def test_prediction_timer_cannot_place_bet_after_shutdown(self):
         self.twitch.running = False
