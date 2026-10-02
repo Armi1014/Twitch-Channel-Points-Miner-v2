@@ -18,7 +18,7 @@ This example is intentionally biased toward a safe first run:
 import logging
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
-from TwitchChannelPointsMiner.classes.Settings import FollowersOrder, Priority
+from TwitchChannelPointsMiner.classes.Settings import Events, FollowersOrder, Priority
 from TwitchChannelPointsMiner.classes.entities.Bet import (
     BetSettings,
     Condition,
@@ -126,6 +126,22 @@ WATCH_STREAK_OFFLINE_WAIT_SECONDS = 30 * 60  # 0 = more aggressive checking
 # ---------------------------------------------------------------------------
 # 4. Logging
 # ---------------------------------------------------------------------------
+# Optional notifications: uncomment the import and the matching LoggerSettings
+# block below, then replace its placeholders. You can enable several providers.
+# See the README's Notifications section for obtaining credentials.
+# from TwitchChannelPointsMiner.classes.Discord import Discord
+# from TwitchChannelPointsMiner.classes.Gotify import Gotify
+# from TwitchChannelPointsMiner.classes.Matrix import Matrix
+# from TwitchChannelPointsMiner.classes.Pushover import Pushover
+# from TwitchChannelPointsMiner.classes.Telegram import Telegram
+# from TwitchChannelPointsMiner.classes.Webhook import Webhook
+
+NOTIFICATION_EVENTS = [
+    Events.STREAMER_ONLINE,
+    Events.SUBSCRIPTION,
+    Events.DROP_CLAIM,
+]
+
 LOGGER_SETTINGS = LoggerSettings(
     save=True,                   # Write logs to logs/
     console_level=logging.INFO,  # Change to logging.DEBUG when troubleshooting
@@ -139,6 +155,47 @@ LOGGER_SETTINGS = LoggerSettings(
         STREAMER_OFFLINE="RED",
         BET_WIN="MAGENTA",
     ),
+    # Telegram: bot token from BotFather, numeric destination chat ID.
+    # telegram=Telegram(
+    #     chat_id=123456789,  # Replace; group IDs are usually negative
+    #     token="YOUR_BOT_TOKEN",
+    #     events=NOTIFICATION_EVENTS,
+    #     disable_notification=False,  # True = deliver silently
+    # ),
+    # Discord: copy a channel's webhook URL from Server Settings > Integrations.
+    # discord=Discord(
+    #     webhook_api="https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    #     events=NOTIFICATION_EVENTS,
+    # ),
+    # Gotify: application token, not a client token; include /message in the URL.
+    # gotify=Gotify(
+    #     endpoint="https://gotify.example.org/message?token=YOUR_APPLICATION_TOKEN",
+    #     priority=5,
+    #     events=NOTIFICATION_EVENTS,
+    # ),
+    # Matrix logs in immediately when this block is enabled.
+    # Use a password-login account and a room ID, not a #room:server alias.
+    # matrix=Matrix(
+    #     username="your-matrix-username",
+    #     password="YOUR_MATRIX_PASSWORD",
+    #     homeserver="matrix.example.org",  # Hostname, without https://
+    #     room_id="!YOUR_ROOM_ID:matrix.example.org",
+    #     events=NOTIFICATION_EVENTS,
+    # ),
+    # Pushover: your user key plus the API token for your application.
+    # pushover=Pushover(
+    #     userkey="YOUR-ACCOUNT-TOKEN",
+    #     token="YOUR-APPLICATION-TOKEN",
+    #     priority=0,  # Normal priority; emergency priority needs extra API fields
+    #     sound="pushover",
+    #     events=NOTIFICATION_EVENTS,
+    # ),
+    # Generic webhook: receives event_name and message as query parameters.
+    # webhook=Webhook(
+    #     endpoint="https://example.com/webhook",
+    #     method="POST",  # GET or POST; this helper does not send a JSON body
+    #     events=NOTIFICATION_EVENTS,
+    # ),
 )
 
 # ---------------------------------------------------------------------------
@@ -216,41 +273,9 @@ twitch_miner = TwitchChannelPointsMiner(
 # - .state/daily_points_baseline.<account>.json
 # - .state/subscription_notifications.<account>.json
 #
-# Optional notifications:
-# Keep these disabled until you have real credentials. Matrix logs in during
-# startup, and webhook-style integrations will try to send requests when events happen.
-#
-# Example imports if you want to enable them:
-# from TwitchChannelPointsMiner.classes.Discord import Discord
-# from TwitchChannelPointsMiner.classes.Gotify import Gotify
-# from TwitchChannelPointsMiner.classes.Matrix import Matrix
-# from TwitchChannelPointsMiner.classes.Pushover import Pushover
-# from TwitchChannelPointsMiner.classes.Settings import Events
-# from TwitchChannelPointsMiner.classes.Telegram import Telegram
-# from TwitchChannelPointsMiner.classes.Webhook import Webhook
-#
-# Example events list:
-# [
-#     Events.STREAMER_ONLINE,
-#     Events.STREAMER_OFFLINE,
-#     Events.SUBSCRIPTION,
-#     Events.BET_LOSE,
-#     Events.CHAT_MENTION,
-# ]
-#
-# Minimal Discord example:
-# LOGGER_SETTINGS = LoggerSettings(
-#     ...,
-#     discord=Discord(
-#         webhook_api="https://discord.com/api/webhooks/...",
-#         events=[Events.SUBSCRIPTION],
-#     ),
-# )
-#
-# `Events.SUBSCRIPTION` comes from Twitch IRC `USERNOTICE` messages, so the
-# streamer's chat setting must not be `ChatPresence.NEVER`.
-# It is self-only: it alerts when your account gets a sub/resub/subgift/upgrade,
-# and ignores other viewers' subscription events.
+# Notifications are configured in LOGGER_SETTINGS before the miner is created.
+# Events.SUBSCRIPTION is self-only. IRC notices require chat to be enabled;
+# websocket gift-sub notices can arrive without IRC chat presence.
 
 # Settings priority is:
 # 1. Settings passed directly in mine(...)

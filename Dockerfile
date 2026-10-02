@@ -4,8 +4,8 @@ ARG BUILDX_QEMU_ENV
 
 WORKDIR /usr/src/app
 
-COPY ./requirements.txt ./
-COPY ./setup.py ./
+COPY requirements.txt pyproject.toml setup.py README.md LICENSE ./
+COPY TwitchChannelPointsMiner ./TwitchChannelPointsMiner
 
 ENV CRYPTOGRAPHY_DONT_BUILD_RUST=1
 
@@ -22,7 +22,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-ins
     libblas-dev \
     liblapack-dev \
     make \
-    cmake \    
+    cmake \
     automake \
     ninja-build \
     g++ \
@@ -40,5 +40,5 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-ins
   && rm -rf /var/lib/apt/lists/* \
   && rm -rf /usr/share/doc/*
 
-ADD ./TwitchChannelPointsMiner ./TwitchChannelPointsMiner
+COPY assets ./assets
 ENTRYPOINT [ "python", "run.py" ]

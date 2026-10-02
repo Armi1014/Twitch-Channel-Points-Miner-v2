@@ -1,0 +1,68 @@
+name: Container setup check
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.yml
+      - example.py
+      - README.md
+      - pyproject.toml
+      - requirements.txt
+      - tests/test_setup_examples.py
+      - tests/container_smoke.py
+      - .github/workflows/container-check.yml
+  push:
+    branches: [master]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.yml
+      - example.py
+      - README.md
+      - pyproject.toml
+      - requirements.txt
+      - tests/test_setup_examples.py
+      - tests/container_smoke.py
+      - .github/workflows/container-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  container-setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the documented local image
+        run: docker build --tag twitch-channel-points-miner:local .
+      - name: Validate notification examples without external requests
+        run: >-
+          docker run --rm --entrypoint python
+          --mount "type=bind,source=$PWD/tests,target=/usr/src/app/tests,readonly"
+          --mount "type=bind,source=$PWD/example.py,target=/usr/src/app/example.py,readonly"
+          twitch-channel-points-miner:local
+          -m unittest discover -s tests -p test_setup_examples.py
+      - name: Validate Compose and persistent mounts across two runs
+        shell: bash
+        run: |
+          set -eu
+          export MINER_DATA_DIR="$RUNNER_TEMP/miner-smoke"
+          mkdir -p "$MINER_DATA_DIR/cookies" "$MINER_DATA_DIR/logs"
+          cp tests/container_smoke.py "$MINER_DATA_DIR/run.py"
+          docker compose config --quiet
+          docker compose run --rm --no-deps miner
+          docker compose run --rm --no-deps miner
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          data = Path(os.environ["MINER_DATA_DIR"])
+          assert json.loads((data / "cookies/container-smoke.json").read_text()) == {"test": "persisted"}
+          assert json.loads((data / "logs/.state/container-smoke.json").read_text()) == {"runs": 2}
+          assert len((data / "logs/container-smoke.log").read_text().splitlines()) == 2
+          print("Cookies, state, and logs survived container recreation.")
+          PY

@@ -1,0 +1,24 @@
+services:
+  miner:
+    # Build this tag on the Docker host before starting the stack; see README.
+    image: ${MINER_IMAGE:-twitch-channel-points-miner:local}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 2m
+    volumes:
+      - type: bind
+        source: ${MINER_DATA_DIR:-.}/run.py
+        target: /usr/src/app/run.py
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MINER_DATA_DIR:-.}/cookies
+        target: /usr/src/app/cookies
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MINER_DATA_DIR:-.}/logs
+        target: /usr/src/app/logs
+        bind:
+          create_host_path: false
