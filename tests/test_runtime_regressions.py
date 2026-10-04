@@ -864,15 +864,25 @@ class UtilityAndChatRegressionTest(unittest.TestCase):
         self.assertEqual(isoparse(server_time({"server_time": 0})).timestamp(), 0)
         isoparse(server_time(None))
 
-    def test_chat_connection_has_a_timeout(self):
-        client = ClientIRC("tester", "test-token", "streamer")
+    def test_chat_connection_uses_tls_with_a_timeout(self):
+        with patch(
+            "TwitchChannelPointsMiner.classes.Chat.ssl.create_default_context"
+        ) as context:
+            client = ClientIRC("tester", "test-token", "streamer")
         with patch.object(client, "connect") as connection:
             client._connect()
+        address = connection.call_args.args[:2]
+        self.assertEqual(address, ("irc.chat.twitch.tv", 6697))
         with patch(
             "TwitchChannelPointsMiner.classes.Chat.socket.create_connection"
         ) as connect:
-            connection.call_args.kwargs["connect_factory"](("example.invalid", 6667))
-        connect.assert_called_once_with(("example.invalid", 6667), timeout=20)
+            secured_socket = connection.call_args.kwargs["connect_factory"](address)
+        connect.assert_called_once_with(address, timeout=20)
+        context.assert_called_once_with()
+        context.return_value.wrap_socket.assert_called_once_with(
+            connect.return_value, server_hostname="irc.chat.twitch.tv"
+        )
+        self.assertIs(secured_socket, context.return_value.wrap_socket.return_value)
 
     def test_leaving_chat_waits_for_original_thread_before_replacing_it(self):
         streamer = Streamer("tester", StreamerSettings(chat=ChatPresence.ALWAYS))

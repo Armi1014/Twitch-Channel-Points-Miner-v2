@@ -1,5 +1,6 @@
 import logging
 import socket
+import ssl
 import time
 from enum import Enum, auto
 from threading import Event, Thread
@@ -39,13 +40,14 @@ class ClientIRC(SingleServerIRCBot):
         self.channel = "#" + self.channel_name
         self.__active = False
         self.stop_event = stop_event if stop_event is not None else Event()
+        ssl_context = ssl.create_default_context()
 
         super(ClientIRC, self).__init__(
             [(IRC, IRC_PORT, f"oauth:{token}")],
             username,
             username,
-            connect_factory=lambda address: socket.create_connection(
-                address, timeout=20
+            connect_factory=lambda address: ssl_context.wrap_socket(
+                socket.create_connection(address, timeout=20), server_hostname=IRC
             ),
         )
 
