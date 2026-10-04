@@ -1,0 +1,16 @@
+.git
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.env
+.env.*
+run.py
+cookies
+logs
+analytics
+tests
+work
+outputs
