@@ -894,6 +894,37 @@ class UtilityAndChatRegressionTest(unittest.TestCase):
         chat.join.assert_called_once_with(timeout=25)
         self.assertIsNot(streamer.irc_chat, chat)
 
+    def test_chat_shutdown_during_read_does_not_log_socket_error(self):
+        client = ClientIRC("tester", "test-token", "streamer")
+
+        def stop_during_read(**kwargs):
+            client.die()
+            raise OSError("Read on closed or unwrapped SSL socket")
+
+        with (
+            patch.object(client, "_connect"),
+            patch.object(client.connection, "disconnect") as disconnect,
+            patch.object(client.reactor, "process_once", side_effect=stop_during_read),
+            patch("TwitchChannelPointsMiner.classes.Chat.logger.error") as error,
+        ):
+            client.start()
+        error.assert_not_called()
+        disconnect.assert_called_once()
+
+    def test_chat_read_error_while_running_is_still_logged_and_disconnects(self):
+        client = ClientIRC("tester", "test-token", "streamer")
+        with (
+            patch.object(client, "_connect"),
+            patch.object(client.connection, "disconnect") as disconnect,
+            patch.object(
+                client.reactor, "process_once", side_effect=OSError("Socket failed")
+            ),
+            patch("TwitchChannelPointsMiner.classes.Chat.logger.error") as error,
+        ):
+            client.start()
+        error.assert_called_once()
+        disconnect.assert_called_once_with("Disconnecting after error")
+
     def test_connectivity_check_closes_socket_and_does_not_set_global_timeout(self):
         with (
             patch("TwitchChannelPointsMiner.utils.socket.create_connection") as connect,

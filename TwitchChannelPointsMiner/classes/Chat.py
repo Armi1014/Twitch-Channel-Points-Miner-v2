@@ -186,6 +186,8 @@ class ClientIRC(SingleServerIRCBot):
                 self.reactor.process_once(timeout=0.2)
                 time.sleep(0.01)
             except Exception as e:
+                if self.stop_event.is_set() or not self.__active:
+                    break
                 logger.error(
                     f"Exception raised: {e}. Thread is active: {self.__active}"
                 )
