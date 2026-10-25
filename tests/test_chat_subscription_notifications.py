@@ -170,6 +170,10 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
                 client.on_usernotice(None, event)
 
             info_log.assert_called_once()
+            details = info_log.call_args.kwargs["extra"]["discord_details"]
+            self.assertEqual(details["msg_id"], "subgift")
+            self.assertEqual(details["recipient"], "LuckyViewer")
+            self.assertEqual(details["gifter"], "GiftGiver")
             self.assertTrue(os.path.isfile(cache_path))
 
     def test_subscription_dedupe_ignores_points_label_changes(self):
@@ -311,6 +315,11 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
                 ),
             )
             self.assertEqual(kwargs["extra"]["event"], Events.SUBSCRIPTION)
+            details = kwargs["extra"]["discord_details"]
+            self.assertEqual(details["channel"], "streamer")
+            self.assertEqual(details["recipient"], "LuckyViewer")
+            self.assertEqual(details["gifter"], "GiftGiver")
+            self.assertEqual(details["plan"], "Tier 1")
 
     def test_gift_subscription_lookup_uses_wide_paginated_default(self):
         twitch = Twitch("LuckyViewer", "ua")

@@ -35,7 +35,8 @@ class MakePredictionsTest(unittest.TestCase):
         return SimpleNamespace(
             status="ACTIVE",
             event_id="event-1",
-            streamer=SimpleNamespace(channel_points=100),
+            title="Blue wins?",
+            streamer=SimpleNamespace(channel_points=100, username="2okos"),
             bet=FakeBet(),
         )
 
@@ -89,6 +90,11 @@ class MakePredictionsTest(unittest.TestCase):
             mocked_error.call_args.args[0],
             "Failed to place bet, MakePrediction returned no result",
         )
+        details = mocked_error.call_args.kwargs["extra"]["discord_details"]
+        self.assertEqual(details["channel"], "2okos")
+        self.assertEqual(details["prediction"], "Blue wins?")
+        self.assertEqual(details["stake"], 10)
+        self.assertIn("no prediction result", details["error"])
 
     def test_make_predictions_uses_gql_error_logger_before_payload_check(self):
         response = {
@@ -109,6 +115,9 @@ class MakePredictionsTest(unittest.TestCase):
 
         mocked_warning.assert_called_once()
         mocked_error.assert_not_called()
+        extra = mocked_warning.call_args.kwargs["extra"]
+        self.assertEqual(str(extra["event"]), "BET_FAILED")
+        self.assertEqual(extra["discord_details"]["error"], "prediction is closed")
 
     def test_prediction_amount_is_clamped_to_twitch_limit(self):
         bet_module._prediction_cap_warning_logged = False

@@ -690,7 +690,17 @@ class Twitch(object):
             streamer.subscription_tier = tier or streamer.subscription_tier or 1
         logger.info(
             message,
-            extra={"emoji": ":partying_face:", "event": Events.SUBSCRIPTION},
+            extra={
+                "emoji": ":partying_face:",
+                "event": Events.SUBSCRIPTION,
+                "discord_details": {
+                    "msg_id": msg_id,
+                    "channel": channel,
+                    "recipient": self.account_username,
+                    "gifter": gifter,
+                    "plan": plan,
+                },
+            },
         )
         return True
 
@@ -1290,7 +1300,7 @@ class Twitch(object):
 
         return "; ".join(normalized_messages), service_timeout_count > 0
 
-    def _log_gql_errors(self, operation_name, response):
+    def _log_gql_errors(self, operation_name, response, *, extra=None):
         if not isinstance(response, dict):
             return False
         errors = response.get("errors") or []
@@ -1318,8 +1328,16 @@ class Twitch(object):
         key = (operation_name, message)
         last_logged = self._last_gql_error_log.get(key, 0)
         if now - last_logged >= GQL_ERROR_LOG_TTL:
+            kwargs = {}
+            if extra is not None:
+                notification_extra = dict(extra)
+                notification_extra["discord_details"] = {
+                    **extra.get("discord_details", {}),
+                    "error": message,
+                }
+                kwargs["extra"] = notification_extra
             logger.warning(
-                "GQL operation %s returned errors: %s", operation_name, message
+                "GQL operation %s returned errors: %s", operation_name, message, **kwargs
             )
             self._last_gql_error_log[key] = now
         return True
@@ -2873,6 +2891,23 @@ class Twitch(object):
         if not self.running:
             return
         decision = event.bet.calculate(event.streamer.channel_points)
+        outcomes = getattr(event.bet, "outcomes", [])
+        choice = decision.get("choice")
+        bet_details = {
+            "channel": getattr(event.streamer, "username", None),
+            "prediction": getattr(event, "title", None),
+            "outcome": (
+                outcomes[choice].get("title")
+                if isinstance(choice, int) and 0 <= choice < len(outcomes)
+                else None
+            ),
+            "stake": decision.get("amount"),
+        }
+        failed_extra = {
+            "emoji": ":four_leaf_clover:",
+            "event": Events.BET_FAILED,
+            "discord_details": bet_details,
+        }
         # selector_index = 0 if decision["choice"] == "A" else 1
 
         logger.info(
@@ -2920,7 +2955,9 @@ class Twitch(object):
                         }
                     }
                     response = self.post_gql_request(json_data)
-                    if self._log_gql_errors(json_data.get("operationName"), response):
+                    if self._log_gql_errors(
+                        json_data.get("operationName"), response, extra=failed_extra
+                    ):
                         return
                     make_prediction = None
                     if isinstance(response, dict):
@@ -2929,16 +2966,16 @@ class Twitch(object):
                             make_prediction = data.get("makePrediction")
 
                     if make_prediction is None:
-                        if isinstance(response, dict) and isinstance(
-                            response.get("data"), dict
-                        ):
-                            logger.error(
-                                "Failed to place bet, MakePrediction returned no result",
-                                extra={
-                                    "emoji": ":four_leaf_clover:",
-                                    "event": Events.BET_FAILED,
+                        logger.error(
+                            "Failed to place bet, MakePrediction returned no result",
+                            extra={
+                                **failed_extra,
+                                "discord_details": {
+                                    **bet_details,
+                                    "error": "Twitch returned no prediction result",
                                 },
-                            )
+                            },
+                        )
                         return
 
                     if not isinstance(make_prediction, dict):
@@ -2946,8 +2983,11 @@ class Twitch(object):
                             "Failed to place bet, unexpected MakePrediction response: %s",
                             make_prediction,
                             extra={
-                                "emoji": ":four_leaf_clover:",
-                                "event": Events.BET_FAILED,
+                                **failed_extra,
+                                "discord_details": {
+                                    **bet_details,
+                                    "error": "Unexpected prediction response from Twitch",
+                                },
                             },
                         )
                         return
@@ -2962,8 +3002,8 @@ class Twitch(object):
                         logger.error(
                             f"Failed to place bet, error: {error_code}",
                             extra={
-                                "emoji": ":four_leaf_clover:",
-                                "event": Events.BET_FAILED,
+                                **failed_extra,
+                                "discord_details": {**bet_details, "error": error_code},
                             },
                         )
                 else:
@@ -2978,8 +3018,11 @@ class Twitch(object):
             logger.info(
                 f"Oh no! The event is not active anymore! Current status: {event.status}",
                 extra={
-                    "emoji": ":disappointed_relieved:",
-                    "event": Events.BET_FAILED,
+                    **failed_extra,
+                    "discord_details": {
+                        **bet_details,
+                        "error": f"Prediction is no longer active ({event.status})",
+                    },
                 },
             )
 
@@ -3154,7 +3197,7 @@ class Twitch(object):
             return False
 
         logger.info(
-            f"Claim {drop}", extra={"emoji": ":package:", "event": Events.DROP_CLAIM}
+            f"Claim {drop}", extra={"emoji": ":package:"}
         )
 
         json_data = copy.deepcopy(GQLOperations.DropsPage_ClaimDropRewards)
@@ -3173,6 +3216,19 @@ class Twitch(object):
             logger.warning("Drop claim response did not include a status for %s", drop)
         else:
             logger.debug("Drop claim response for %s returned status %s", drop, status)
+        if status == "ELIGIBLE_FOR_ALL":
+            logger.info(
+                "Claimed %s", drop,
+                extra={
+                    "emoji": ":package:",
+                    "event": Events.DROP_CLAIM,
+                    "discord_details": {
+                        "drop_name": getattr(drop, "name", None),
+                        "reward": getattr(drop, "benefit", None),
+                        "minutes_required": getattr(drop, "minutes_required", None),
+                    },
+                },
+            )
         return status in ["ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"]
 
     def claim_all_drops_from_inventory(self):

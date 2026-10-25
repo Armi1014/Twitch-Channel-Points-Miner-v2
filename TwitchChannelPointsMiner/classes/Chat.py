@@ -244,7 +244,11 @@ class ClientIRC(SingleServerIRCBot):
                 return
             logger.info(
                 message,
-                extra={"emoji": ":partying_face:", "event": Events.SUBSCRIPTION},
+                extra={
+                    "emoji": ":partying_face:",
+                    "event": Events.SUBSCRIPTION,
+                    "discord_details": self._subscription_context_from_event(event),
+                },
             )
 
 

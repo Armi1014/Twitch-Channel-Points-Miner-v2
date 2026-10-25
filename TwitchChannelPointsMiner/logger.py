@@ -4,7 +4,7 @@ import platform
 import queue
 import pytz
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
 
@@ -236,7 +236,11 @@ class GlobalFormatter(logging.Formatter):
             and self.settings.discord.webhook_api
             != "https://discord.com/api/webhooks/0123456789/0a1B2c3D4e5F6g7H8i9J"
         ):
-            self.settings.discord.send(record.msg, record.event)
+            details = dict(getattr(record, "discord_details", None) or {})
+            details["timestamp"] = datetime.fromtimestamp(
+                record.created, timezone.utc
+            ).isoformat()
+            self.settings.discord.send(record.getMessage(), record.event, details=details)
 
     def webhook(self, record):
         skip_webhook = False if hasattr(

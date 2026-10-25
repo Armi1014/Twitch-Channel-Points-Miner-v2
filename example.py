@@ -166,6 +166,7 @@ LOGGER_SETTINGS = LoggerSettings(
     # discord=Discord(
     #     webhook_api="https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
     #     events=NOTIFICATION_EVENTS,
+    #     message_format="embed",  # "plain" restores text-only messages
     # ),
     # Gotify: application token, not a client token; include /message in the URL.
     # gotify=Gotify(

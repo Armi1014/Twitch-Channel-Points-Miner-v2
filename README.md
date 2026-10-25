@@ -64,6 +64,23 @@ or add others such as `Events.STREAMER_OFFLINE`, `Events.BET_WIN`, and
 An empty list sends no events. Notifications remain disabled until you uncomment
 a provider block.
 
+Discord uses English embed cards by default, with event emojis, colored sidebars,
+timestamps, and structured drop, subscription, and prediction details. Prediction
+results show the original stake, total payout, and net gain/loss; refunds show
+the returned stake and zero net gain. Available channel names link to Twitch.
+Set `message_format="plain"` in `Discord(...)` to restore text-only messages.
+Discord emojis work independently of the console's `emoji` setting. Mentions are
+disabled, and long text is shortened to fit Discord's message limits.
+
+Drop notifications are sent only after Twitch confirms a new successful claim.
+Already-claimed drops and unsuccessful attempts do not produce a claim card.
+The event selection still controls what is sent; ordinary point gains and
+stream-online messages are not added automatically.
+
+Custom integrations can call `Discord.send(message, event, details=...)` with
+structured data. Without details, an embed containing the original message is
+used. Telegram, Matrix, and the other providers keep their existing formatting.
+
 | Provider | Required configuration and setup |
 |---|---|
 | Telegram | Create a bot with [BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token), copy its token into `token`, and send `/start` to your bot. Use your destination's numeric `chat_id`; after sending a message, the Bot API's [`getUpdates`](https://core.telegram.org/bots/api#getupdates) response exposes it in `message.chat.id`. Group IDs may be negative; the bot must be a member with permission to send messages. `disable_notification=True` sends silently. |

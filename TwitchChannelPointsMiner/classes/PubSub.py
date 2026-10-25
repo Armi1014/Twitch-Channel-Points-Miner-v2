@@ -247,6 +247,18 @@ class PubSubHandler(MessageListener):
                                 "event": Events.get(
                                     f"BET_{event_prediction.result['type']}"
                                 ),
+                                "discord_details": {
+                                    "channel": event_prediction.streamer.username,
+                                    "prediction": event_prediction.title,
+                                    "outcome": decision["title"],
+                                    "stake": event_prediction.bet.decision["amount"],
+                                    "payout": (
+                                        event_prediction.bet.decision["amount"]
+                                        if event_prediction.result["type"] == "REFUND"
+                                        else points["won"]
+                                    ),
+                                    "net_points": points["gained"],
+                                },
                             },
                         )
 
