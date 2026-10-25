@@ -86,6 +86,8 @@ Use Docker with the Compose v2 plugin. Run these commands from this repository
 on the Docker host; Python does not need to be installed on that host. Compose
 downloads the ready-to-run image from GitHub Container Registry:
 `ghcr.io/armi1014/twitch-channel-points-miner-v2:latest`.
+The published image supports 64-bit PCs/servers (`linux/amd64`) and 64-bit ARM
+devices (`linux/arm64`). Each version is built and checked on its native platform.
 
 ```sh
 cp example.py run.py
