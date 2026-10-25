@@ -1,5 +1,6 @@
 import time
 import unittest
+from unittest.mock import patch
 
 from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.classes.Twitch import ActiveWatchStreakAttempt, Twitch
@@ -7,6 +8,20 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import Streamer, Streame
 
 
 class WatchStreakFallbackTest(unittest.TestCase):
+    def test_watch_streak_notification_confirms_reward_without_waiting_for_days(self):
+        twitch = Twitch("watch-streak-notification", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name=twitch.account_username)
+        streamer = self._make_streamer()
+        with patch.object(Twitch, "get_watch_streak_days") as lookup:
+            self.assertTrue(twitch.record_watch_streak_evidence(
+                streamer, evidence_source="pubsub_watch_streak",
+            ))
+        session = twitch.watch_streak_cache.get_session("streamer", "broadcastA")
+        self.assertTrue(session.claimed)
+        self.assertIsNone(session.verified_streak_days)
+        self.assertFalse(streamer.stream.watch_streak_missing)
+        lookup.assert_not_called()
+
     def _make_streamer(self):
         settings = StreamerSettings(
             watch_streak=True,

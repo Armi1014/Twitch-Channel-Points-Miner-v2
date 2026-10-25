@@ -1,7 +1,6 @@
 services:
   miner:
-    # Build this tag on the Docker host before starting the stack; see README.
-    image: ${MINER_IMAGE:-twitch-channel-points-miner:local}
+    image: ${MINER_IMAGE:-ghcr.io/armi1014/twitch-channel-points-miner-v2:latest}
     init: true
     restart: unless-stopped
     stop_grace_period: 2m

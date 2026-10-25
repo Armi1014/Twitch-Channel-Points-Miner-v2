@@ -13,6 +13,25 @@ from TwitchChannelPointsMiner.TwitchChannelPointsMiner import TwitchChannelPoint
 
 
 class WatchStreakCacheTest(unittest.TestCase):
+    def test_attempt_limit_is_persisted_without_marking_unverified_streak_claimed(self):
+        now = time.time()
+        cache = WatchStreakCache(default_account_name="tester")
+        first = cache.mark_attempt("streamer", "broadcastA", now, next_retry_at=now + 300)
+        self.assertIsNone(first.ended_at)
+        final = cache.mark_attempt("streamer", "broadcastA", now + 600, next_retry_at=now + 900)
+        self.assertEqual(final.attempts, 2)
+        self.assertFalse(final.claimed)
+        self.assertEqual(final.ended_at, now + 600)
+        self.assertIsNone(final.next_retry_at)
+        self.assertEqual(cache.pending_sessions(), [])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "streaks.json")
+            cache.save_to_disk_if_dirty(path)
+            restored = WatchStreakCache.load_from_disk(path, default_account_name="tester")
+            self.assertEqual(restored.pending_sessions(), [])
+            self.assertFalse(restored.get_session("streamer", "broadcastA").claimed)
+
     def test_cache_session_lifecycle_and_prune(self):
         now = time.time()
         cache = WatchStreakCache(default_account_name="tester")

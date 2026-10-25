@@ -7,7 +7,11 @@ from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.entities.Bet import (
     Bet,
     BetSettings,
+    Condition,
+    DelayMode,
+    FilterCondition,
     MAX_PREDICTION_BET_POINTS,
+    OutcomeKeys,
     Strategy,
 )
 
@@ -34,6 +38,37 @@ class MakePredictionsTest(unittest.TestCase):
             streamer=SimpleNamespace(channel_points=100),
             bet=FakeBet(),
         )
+
+    def test_issue_11_settings_place_bet_only_when_300_users_filter_passes(self):
+        for total_users in (299, 300):
+            with self.subTest(total_users=total_users):
+                settings = BetSettings(
+                    strategy=Strategy.SMART_MONEY, percentage=10, max_points=50000,
+                    minimum_points=1, stealth_mode=True,
+                    delay_mode=DelayMode.FROM_END, delay=6,
+                    filter_condition=FilterCondition(
+                        by=OutcomeKeys.TOTAL_USERS, where=Condition.GTE, value=300,
+                    ),
+                )
+                settings.default()
+                event = self._event()
+                event.streamer.channel_points = 100000
+                event.bet = Bet([
+                    {"id": "blue", "title": "Blue", "color": "BLUE", "total_users": 100,
+                     "total_points": 10000, "top_predictors": [{"points": 5000}]},
+                    {"id": "pink", "title": "Pink", "color": "PINK", "total_users": total_users - 100,
+                     "total_points": 1000, "top_predictors": [{"points": 1000}]},
+                ], settings)
+                with patch.object(Twitch, "post_gql_request", return_value={
+                    "data": {"makePrediction": {"error": None}}
+                }) as post:
+                    self.twitch.make_predictions(event)
+                self.assertEqual(post.call_count, int(total_users >= 300))
+                if total_users >= 300:
+                    placed = post.call_args.args[0]["variables"]["input"]
+                    self.assertEqual(placed["outcomeID"], "blue")
+                    self.assertGreaterEqual(placed["points"], 4995)
+                    self.assertLess(placed["points"], 5000)
 
     def test_make_predictions_handles_null_make_prediction_payload(self):
         response = {"data": {"makePrediction": None}}

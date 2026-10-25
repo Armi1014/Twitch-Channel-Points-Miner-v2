@@ -1,3 +1,5 @@
+import os
+import tempfile
 import time
 import unittest
 from types import SimpleNamespace
@@ -45,6 +47,72 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         if watch_streak_missing is not None:
             payload["watchStreakMissing"] = watch_streak_missing
         return payload
+
+    def test_get_stream_info_ignores_milestone_from_previous_broadcast(self):
+        twitch = Twitch("previous-milestone", "ua")
+        streamer = self._make_streamer("streamer")
+        stream_info = self._stream_info_payload("new-broadcast")
+        stream_info["stream"]["createdAt"] = "2026-03-01T10:00:00Z"
+        reward_response = {
+            "data": {"channel": {"self": {"watchStreakMilestone": {
+                "watchStreakMilestone": {
+                    "achievementTimestamp": "2026-03-01T09:00:00Z",
+                },
+            }}}},
+        }
+        with (
+            patch.object(Twitch, "post_gql_request", return_value={"data": {"user": stream_info}}),
+            patch.object(Twitch, "_get_reward_list_response", return_value=reward_response),
+            patch.object(Twitch, "get_chat_ban_status", return_value=False),
+        ):
+            result = twitch.get_stream_info(streamer)
+        self.assertTrue(result.get("watchStreakMissing", True))
+
+    def test_current_broadcast_milestone_completes_streak_without_day_count(self):
+        twitch = Twitch("milestone-no-days", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name=twitch.account_username)
+        streamer = self._make_streamer("streamer")
+        with (
+            patch.object(Settings, "logger", SimpleNamespace(less=True)),
+            patch.object(Twitch, "get_stream_info", return_value=self._stream_info_payload("b1", False)),
+            patch.object(Twitch, "get_watch_streak_days") as lookup,
+        ):
+            self.assertTrue(twitch.update_stream(streamer))
+        self.assertTrue(twitch.watch_streak_cache.get_session("streamer", "b1").claimed)
+        self.assertFalse(streamer.stream.watch_streak_missing)
+        lookup.assert_not_called()
+
+    def test_streak_selection_skips_exhausted_sessions_from_older_cache(self):
+        twitch = Twitch("legacy-exhausted", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name=twitch.account_username)
+        streamer = self._make_streamer("streamer")
+        streamer.stream.broadcast_id = "b1"
+        session = twitch.watch_streak_cache.ensure_session("streamer", "b1", time.time())
+        session.attempts = twitch.max_streak_attempts + 1
+        self.assertEqual(twitch._select_streak_streamers([streamer], [0], [], time.time()), [])
+
+    def test_cleanup_stops_and_logs_after_final_attempt(self):
+        twitch = Twitch("final-attempt", "ua")
+        twitch.watch_streak_cache = WatchStreakCache(default_account_name=twitch.account_username)
+        streamer = self._make_streamer("streamer")
+        streamer.is_online = True
+        streamer.stream.broadcast_id = "b1"
+        now = time.time()
+        session = twitch.watch_streak_cache.ensure_session("streamer", "b1", now)
+        session.attempts = twitch.max_streak_attempts - 1
+        twitch._active_streak_attempts[session.key()] = ActiveWatchStreakAttempt(
+            session.key(), "streamer", "b1", now - twitch.streak_attempt_timeout_seconds, 0
+        )
+        with (
+            patch.object(Twitch, "get_watch_streak_days", return_value=None),
+            patch("TwitchChannelPointsMiner.classes.Twitch.logger.info") as info,
+        ):
+            twitch._cleanup_streak_attempts([streamer], now)
+        self.assertFalse(twitch._active_streak_attempts)
+        self.assertFalse(session.claimed)
+        self.assertIsNotNone(session.ended_at)
+        self.assertIn("Exhausted", info.call_args.args[0])
+        self.assertEqual(twitch._select_streak_streamers([streamer], [0], [], now + 3600), [])
 
     def test_extract_stream_created_timestamp_handles_null_nodes(self):
         twitch = Twitch("stream-created-null", "ua")
@@ -516,7 +584,7 @@ class WatchStreakMilestoneTest(unittest.TestCase):
         self.assertEqual(session.verified_streak_days, 5)
         self.assertFalse(streamer.stream.watch_streak_missing)
 
-    def test_update_stream_keeps_milestone_hint_pending_without_day_increase(self):
+    def test_update_stream_accepts_current_broadcast_milestone_without_day_increase(self):
         twitch = Twitch("milestone-no-increase", "ua")
         twitch.watch_streak_cache = WatchStreakCache(default_account_name="milestone-no-increase")
         streamer = self._make_streamer("streamer")
@@ -572,8 +640,23 @@ class WatchStreakMilestoneTest(unittest.TestCase):
             account_name=twitch.account_username,
         )
         self.assertIsNotNone(session)
-        self.assertFalse(session.claimed)
-        self.assertTrue(streamer.stream.watch_streak_missing)
+        self.assertTrue(session.claimed)
+        self.assertFalse(streamer.stream.watch_streak_missing)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_path = os.path.join(tmp_dir, "streaks.json")
+            twitch.watch_streak_cache.save_to_disk_if_dirty(cache_path)
+            restarted = Twitch(twitch.account_username, "ua")
+            restarted.watch_streak_cache = WatchStreakCache.load_from_disk(
+                cache_path, default_account_name=twitch.account_username
+            )
+            restarted.watch_streak_cache.mark_bootstrap_done()
+            streamer.stream.watch_streak_missing = True
+            self.assertEqual(
+                restarted._select_streak_streamers([streamer], [0], [], time.time()),
+                [],
+            )
+            self.assertFalse(streamer.stream.watch_streak_missing)
 
     def test_update_stream_persists_watch_streak_days_in_status_cache(self):
         twitch = Twitch("milestone-days-cache", "ua")

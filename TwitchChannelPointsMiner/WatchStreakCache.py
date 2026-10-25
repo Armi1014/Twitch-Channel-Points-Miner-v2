@@ -503,6 +503,9 @@ class WatchStreakCache:
             session.attempts += 1
             session.last_attempt_at = attempt_end_time
             session.next_retry_at = next_retry_at
+            if session.attempts >= max_attempts:
+                session.ended_at = session.ended_at or attempt_end_time
+                session.next_retry_at = None
             self._dirty = True
             return session
 

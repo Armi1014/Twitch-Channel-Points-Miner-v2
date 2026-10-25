@@ -2068,6 +2068,9 @@ class Twitch(object):
             streamer.username, broadcast_id, account_name=self.account_username
         )
         if session:
+            if session.claimed:
+                streamer.stream.watch_streak_missing = False
+                return session
             self._resolve_watch_streak_baseline(
                 session,
                 streamer,
@@ -2129,7 +2132,11 @@ class Twitch(object):
     ) -> bool:
         if session is None:
             return False
-        if session.claimed or session.ended_at is not None:
+        if (
+            session.claimed
+            or session.ended_at is not None
+            or session.attempts >= self.max_streak_attempts
+        ):
             return False
         if not self._streamer_can_attempt_watch_streak(streamer):
             return False
@@ -2306,12 +2313,16 @@ class Twitch(object):
             return True
 
         current_days = self._normalize_streak_days(current_days)
+        # RewardList timestamps are checked against the current broadcast in
+        # get_stream_info. A WATCH_STREAK reward is also direct confirmation.
+        # Neither needs a further day increase after a restart or a delayed API update.
+        confirmed_reward = evidence_source in {"reward_list_state", "pubsub_watch_streak"}
         baseline, baseline_is_trusted = self._resolve_watch_streak_baseline(
             session,
             streamer,
             now,
             current_days=current_days,
-            allow_live_lookup=True,
+            allow_live_lookup=not confirmed_reward,
         )
         session = self.watch_streak_cache.get_session(
             streamer.username,
@@ -2319,7 +2330,7 @@ class Twitch(object):
             account_name=self.account_username,
         ) or session
 
-        if baseline is None:
+        if baseline is None and not confirmed_reward:
             streamer.stream.watch_streak_missing = True
             self._log_watch_issue(
                 streamer.username,
@@ -2331,14 +2342,16 @@ class Twitch(object):
             )
             return False
 
-        if not self._verification_due(session, now, force, current_days):
+        if not confirmed_reward and not self._verification_due(
+            session, now, force, current_days
+        ):
             return False
 
-        if current_days is None:
+        if current_days is None and not confirmed_reward:
             current_days = self.get_watch_streak_days(streamer)
         current_days = self._normalize_streak_days(current_days)
 
-        if current_days is None:
+        if current_days is None and not confirmed_reward:
             streamer.stream.watch_streak_missing = True
             self.watch_streak_cache.record_verification(
                 streamer.username,
@@ -2357,7 +2370,7 @@ class Twitch(object):
             )
             return False
 
-        if baseline_is_trusted and current_days > baseline:
+        if confirmed_reward or (baseline_is_trusted and current_days > baseline):
             session = self.watch_streak_cache.mark_claimed(
                 streamer.username,
                 broadcast_id=session.broadcast_id,
@@ -2525,6 +2538,9 @@ class Twitch(object):
                 max_attempts=self.max_streak_attempts,
                 next_retry_at=now + STREAK_RETRY_COOLDOWN_SECONDS,
             )
+            if session.ended_at is not None:
+                self._log_streak_failed(session)
+                continue
             self._log_watch_issue(
                 attempt.streamer,
                 "watch_streak_retry",

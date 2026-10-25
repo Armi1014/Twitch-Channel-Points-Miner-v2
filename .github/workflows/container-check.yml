@@ -51,6 +51,7 @@ jobs:
         run: |
           set -eu
           export MINER_DATA_DIR="$RUNNER_TEMP/miner-smoke"
+          export MINER_IMAGE=twitch-channel-points-miner:local
           mkdir -p "$MINER_DATA_DIR/cookies" "$MINER_DATA_DIR/logs"
           cp tests/container_smoke.py "$MINER_DATA_DIR/run.py"
           docker compose config --quiet

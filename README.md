@@ -83,7 +83,9 @@ for the IRC and websocket paths.
 ## Docker And Docker Compose
 
 Use Docker with the Compose v2 plugin. Run these commands from this repository
-on the Docker host; Python does not need to be installed on that host.
+on the Docker host; Python does not need to be installed on that host. Compose
+downloads the ready-to-run image from GitHub Container Registry:
+`ghcr.io/armi1014/twitch-channel-points-miner-v2:latest`.
 
 ```sh
 cp example.py run.py
@@ -95,11 +97,11 @@ Leave optional notification blocks disabled until configured. Existing sessions
 can be reused by copying `cookies/YOUR_USERNAME.pkl` into the new `cookies/`
 directory. It must match the username in `run.py`.
 
-Build the image from this fork's source, validate the Compose configuration,
+Download the image, validate the Compose configuration,
 then start in the foreground so you can see the first-login activation code:
 
 ```sh
-docker build -t twitch-channel-points-miner:local .
+docker compose pull
 docker compose config --quiet
 docker compose up
 ```
@@ -117,8 +119,8 @@ On Windows PowerShell, use `Copy-Item example.py run.py` and
 `New-Item -ItemType Directory -Force cookies, logs` for the preparation commands;
 the Docker commands are the same.
 
-The supplied [docker-compose.yml](docker-compose.yml) uses an image built in
-advance, which also supports Portainer deployments. Its persistent paths are:
+The supplied [docker-compose.yml](docker-compose.yml) uses the published image,
+which also supports Portainer deployments. Its persistent paths are:
 
 | Host path | Container path | Access |
 |---|---|---|
@@ -141,13 +143,24 @@ docker compose stop
 docker compose down
 ```
 
-Both commands preserve the host's cookies and logs. After updating the source,
-rebuild and recreate the container without removing those directories:
+Both commands preserve the host's cookies and logs. To install a newly published
+image, download it and recreate the container without removing those directories:
 
 ```sh
-docker build -t twitch-channel-points-miner:local .
+docker compose pull
 docker compose up -d --force-recreate
 ```
+
+To build your own local changes instead, run
+`docker build -t twitch-channel-points-miner:local .` and set
+`MINER_IMAGE=twitch-channel-points-miner:local` before using Compose or Portainer.
+Do not request a registry pull when using this local tag.
+
+The **Publish Docker image** GitHub Actions workflow publishes images on pushes
+to `master`, on `v*` version tags, or when started manually. It uses GitHub's
+automatic token; no Docker Hub account or repository secrets are needed. A new
+GHCR package initially has private visibility: its owner must change the package
+to public once to allow downloads without signing in.
 
 For a direct Docker run on Linux/macOS, using the same prepared files:
 
@@ -156,27 +169,25 @@ docker run --rm -it --init --stop-timeout 120 \
   --mount "type=bind,source=$PWD/run.py,target=/usr/src/app/run.py,readonly" \
   --mount "type=bind,source=$PWD/cookies,target=/usr/src/app/cookies" \
   --mount "type=bind,source=$PWD/logs,target=/usr/src/app/logs" \
-  twitch-channel-points-miner:local
+  ghcr.io/armi1014/twitch-channel-points-miner-v2:latest
 ```
 
 ## Portainer
 
-Use a **Docker Standalone** environment. Build the image on the Docker host
-selected in Portainer using the command above, and prepare a data directory
-there, for example `/opt/twitch-miner`, containing configured `run.py`, `cookies/`,
+Use a **Docker Standalone** environment. Prepare a data directory on the Docker
+host selected in Portainer, for example `/opt/twitch-miner`, containing configured `run.py`, `cookies/`,
 and `logs/`. Paths refer to that Docker host, even when Portainer runs elsewhere
 or you access it from your own PC. See [Docker's bind-mount documentation](https://docs.docker.com/engine/storage/bind-mounts/).
 
 1. Open **Stacks → Add stack** and name it `twitch-miner`.
 2. Paste the contents of [docker-compose.yml](docker-compose.yml) into the editor.
 3. Add `MINER_DATA_DIR=/opt/twitch-miner` under the stack's environment variables.
-   Keep the image's default tag, or set `MINER_IMAGE` to the tag built on that host.
+   Keep the image's default GHCR tag, or set `MINER_IMAGE` to a specific version.
 4. Deploy the stack and open the miner container's **Logs** to complete Twitch
    activation if needed. Portainer's **Console** is available for troubleshooting;
    no interactive console is required for device-code activation.
-5. After rebuilding an updated image on that host, recreate the stack's container
-   with the same environment values and mounts. Use the local image instead of
-   requesting a registry pull for the `:local` tag.
+5. To update, pull the latest image and recreate the stack's container with the
+   same environment values and mounts.
 
 The Compose file has no `build` directive because Portainer's remote-environment
 stack deployment does not support those steps. See [Portainer's known issue](https://docs.portainer.io/faqs/known-issues/docker-compose-files-including-build-steps-fail).
@@ -201,10 +212,12 @@ For implementation history and deeper notes, see [FORK_FEATURES.md](FORK_FEATURE
 The miner now treats Twitch watch streaks conservatively:
 
 - `WATCH` means normal watch points were awarded.
-- `WATCH_STREAK` is treated as a hint that Twitch may have awarded the streak.
-- The miner marks a streak completed only after Twitch's streak day count increases.
+- A `WATCH_STREAK` reward or a milestone timestamp belonging to the current
+  broadcast confirms completion, including after a miner restart.
+- Otherwise, completion requires an increase in Twitch's streak day count.
 
-This matters because Twitch can send misleading streak signals. The miner keeps retrying pending streaks through the current broadcast instead of stopping on a false alarm.
+Normal watch rewards alone do not confirm a streak. Unverified attempts are
+limited to two per broadcast, with a cooldown between attempts.
 
 More streak details are in [FAQ.md](FAQ.md).
 
