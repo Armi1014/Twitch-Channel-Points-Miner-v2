@@ -19,7 +19,7 @@ from TwitchChannelPointsMiner.logger import GlobalFormatter, LoggerSettings
 
 WEBHOOK = "https://discord.example.invalid/webhook/TEST_SECRET"
 EVENTS = [Events.DROP_CLAIM, Events.SUBSCRIPTION, Events.BET_WIN,
-          Events.BET_LOSE, Events.BET_REFUND, Events.BET_FAILED]
+          Events.BET_LOSE, Events.BET_REFUND, Events.BET_FAILED, Events.BET_PLACED]
 
 
 def units(text):
@@ -34,7 +34,7 @@ class DiscordPayloadTest(unittest.TestCase):
     def setUp(self):
         self.discord = Discord(WEBHOOK, EVENTS)
 
-    def test_all_six_event_styles_have_emoji_color_and_timestamp(self):
+    def test_all_event_styles_have_emoji_color_and_timestamp(self):
         cases = [
             (Events.DROP_CLAIM, "🎁 Drop claimed", 0x5865F2),
             (Events.SUBSCRIPTION, "🎉 Subscription", 0x9146FF),
@@ -42,6 +42,7 @@ class DiscordPayloadTest(unittest.TestCase):
             (Events.BET_LOSE, "❌ Prediction lost", 0xED4245),
             (Events.BET_REFUND, "↩️ Prediction refunded", 0xFEE75C),
             (Events.BET_FAILED, "⚠️ Prediction failed", 0xE67E22),
+            (Events.BET_PLACED, "🎯 Prediction placed", 0x3498DB),
         ]
         for event, title, color in cases:
             with self.subTest(event=event):
@@ -77,6 +78,15 @@ class DiscordPayloadTest(unittest.TestCase):
         })
         self.assertIn("https://www.twitch.tv/drops/inventory", payload["embeds"][0]["description"])
         self.assertNotIn("Channel", fields(payload))
+
+    def test_placed_prediction_has_choice_and_stake_without_result(self):
+        payload = self.discord.build_payload("Confirmed", Events.BET_PLACED, details={
+            "channel": "2okos", "prediction": "Blue wins?", "outcome": "Blue", "stake": 5000,
+        })
+        self.assertEqual(fields(payload), {
+            "Channel": "[2okos](https://www.twitch.tv/2okos)", "Prediction": "Blue wins?",
+            "Outcome": "Blue", "Stake": "5,000 points",
+        })
 
     def test_subscription_only_shows_known_fields(self):
         payload = self.discord.build_payload("Subgift", Events.SUBSCRIPTION, details={
@@ -219,6 +229,39 @@ class DiscordIntegrationTest(unittest.TestCase):
                 details = logger.info.call_args.kwargs["extra"]["discord_details"]
                 self.assertEqual((details["stake"], details["payout"], details["net_points"]), (5000, payout, net))
                 self.assertEqual(details["outcome"], "Blue")
+
+    def test_placed_notification_waits_for_confirmation_and_ignores_duplicates(self):
+        settings = BetSettings(strategy=Strategy.NUMBER_1, percentage=50, max_points=5000)
+        settings.default()
+        streamer = Streamer("2okos", StreamerSettings(bet=settings))
+        streamer.channel_id = "123"
+        event = EventPrediction(streamer, "evt", "Blue wins?", datetime.now(timezone.utc), 60, "ACTIVE", [
+            {"id": "blue", "title": "Blue", "color": "BLUE", "total_users": 1, "total_points": 10},
+            {"id": "pink", "title": "Pink", "color": "PINK", "total_users": 1, "total_points": 10},
+        ])
+        event.bet.calculate(10000)
+        handler = PubSubHandler(Mock(), [streamer], {"evt": event})
+        message = SimpleNamespace(channel_id="123", topic="predictions-user-v1", type="prediction-updated",
+                                  data={"prediction": {"event_id": "evt"}})
+        with (
+            patch.object(Settings, "logger", LoggerSettings(less=True)),
+            patch.object(Settings, "enable_analytics", False),
+            patch("TwitchChannelPointsMiner.classes.PubSub.logger") as logger,
+        ):
+            handler.on_message(message)
+            logger.info.assert_not_called()
+            self.assertFalse(event.bet_confirmed)
+            message.type = "prediction-made"
+            handler.on_message(message)
+            handler.on_message(message)
+        logger.error.assert_not_called()
+        logger.info.assert_called_once()
+        self.assertTrue(event.bet_confirmed)
+        extra = logger.info.call_args.kwargs["extra"]
+        self.assertEqual(extra["event"], Events.BET_PLACED)
+        self.assertEqual(extra["discord_details"], {
+            "channel": "2okos", "prediction": "Blue wins?", "outcome": "Blue", "stake": 5000,
+        })
 
     def test_drop_is_not_announced_before_or_without_new_success(self):
         drop = SimpleNamespace(drop_instance_id="drop-1", name="Drop", benefit="Reward", minutes_required=60)

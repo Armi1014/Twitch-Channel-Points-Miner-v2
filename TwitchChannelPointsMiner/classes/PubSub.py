@@ -286,7 +286,29 @@ class PubSubHandler(MessageListener):
                                     f"{self.events_predictions[event_id].title}",
                                 )
                     elif message.type == "prediction-made":
+                        first_confirmation = not event_prediction.bet_confirmed
                         event_prediction.bet_confirmed = True
+                        if first_confirmation:
+                            decision = event_prediction.bet.decision
+                            choice = decision.get("choice")
+                            outcomes = event_prediction.bet.outcomes
+                            logger.info(
+                                "Bet confirmed by Twitch for %s", event_prediction,
+                                extra={
+                                    "emoji": ":dart:",
+                                    "event": Events.BET_PLACED,
+                                    "discord_details": {
+                                        "channel": event_prediction.streamer.username,
+                                        "prediction": event_prediction.title,
+                                        "outcome": (
+                                            outcomes[choice].get("title")
+                                            if isinstance(choice, int) and 0 <= choice < len(outcomes)
+                                            else None
+                                        ),
+                                        "stake": decision.get("amount"),
+                                    },
+                                },
+                            )
                         if Settings.enable_analytics is True:
                             self.streamers[streamer_index].persistent_annotations(
                                 "PREDICTION_MADE",

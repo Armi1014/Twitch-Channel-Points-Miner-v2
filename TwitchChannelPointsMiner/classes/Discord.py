@@ -14,6 +14,7 @@ _STYLES = {
     Events.BET_LOSE: ("❌ Prediction lost", 0xED4245),
     Events.BET_REFUND: ("↩️ Prediction refunded", 0xFEE75C),
     Events.BET_FAILED: ("⚠️ Prediction failed", 0xE67E22),
+    Events.BET_PLACED: ("🎯 Prediction placed", 0x3498DB),
 }
 _SUBSCRIPTIONS = {
     "sub": "New subscription",
@@ -129,7 +130,7 @@ class Discord(object):
             if details.get("msg_id") in ("subgift", "anonsubgift"):
                 add("Gifted by", details.get("gifter"))
             add("Months", details.get("months"))
-        elif event in (Events.BET_WIN, Events.BET_LOSE, Events.BET_REFUND, Events.BET_FAILED):
+        elif event in (Events.BET_WIN, Events.BET_LOSE, Events.BET_REFUND, Events.BET_FAILED, Events.BET_PLACED):
             add("Prediction", details.get("prediction"), inline=False)
             add("Outcome", details.get("outcome"), inline=False)
             add("Stake", _points(details.get("stake")))
