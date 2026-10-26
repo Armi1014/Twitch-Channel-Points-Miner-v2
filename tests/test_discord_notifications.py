@@ -1,5 +1,6 @@
 import json
 import logging
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -220,10 +221,9 @@ class DiscordIntegrationTest(unittest.TestCase):
                 self.assertEqual(details["outcome"], "Blue")
 
     def test_drop_is_not_announced_before_or_without_new_success(self):
-        twitch = Twitch("discord-test", "ua")
         drop = SimpleNamespace(drop_instance_id="drop-1", name="Drop", benefit="Reward", minutes_required=60)
         cases = [
-            ({"data": {"claimDropRewards": {"status": "ELIGIBLE_FOR_ALL"}}}, True, 1),
+            ({"data": {"claimDropRewards": {"status": "ELIGIBLE_FOR_ALL"}}}, False, 0),
             ({"data": {"claimDropRewards": {"status": "DROP_INSTANCE_ALREADY_CLAIMED"}}}, True, 0),
             ({"data": {"claimDropRewards": {"status": "NOT_ELIGIBLE"}}}, False, 0),
             ({"data": {"claimDropRewards": None}}, False, 0),
@@ -231,7 +231,10 @@ class DiscordIntegrationTest(unittest.TestCase):
         ]
         for response, success, expected in cases:
             with self.subTest(response=response):
-                with patch("TwitchChannelPointsMiner.classes.Twitch.logger") as logger:
+                with tempfile.TemporaryDirectory() as cache, patch("TwitchChannelPointsMiner.classes.Twitch.logger") as logger:
+                    twitch = Twitch("discord-test", "ua")
+                    twitch.cookies_file = cache + "/cookies.pkl"
+                    twitch._drop_claims = {}
                     def submit(_):
                         self.assertFalse(any(call.kwargs.get("extra", {}).get("event") == Events.DROP_CLAIM
                                              for call in logger.info.call_args_list))

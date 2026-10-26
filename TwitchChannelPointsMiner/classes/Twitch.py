@@ -18,6 +18,7 @@ import requests
 
 from pathlib import Path
 from secrets import choice, token_hex
+from threading import RLock
 from typing import Dict, Any, Optional
 from urllib.parse import urljoin, urlparse
 
@@ -67,6 +68,7 @@ from TwitchChannelPointsMiner.utils import (
     create_chunks,
     internet_connection_available,
     interruptible_sleep,
+    load_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,7 @@ CLIENT_VERSION_ERROR_LOG_TTL = 5 * 60
 HTTP_RETRY_ATTEMPTS = 3
 HTTP_RETRY_BACKOFF_BASE = 0.5
 HTTP_RETRY_BACKOFF_CAP = 5.0
+DROP_CLAIM_RETRY_SECONDS = 15 * 60
 RETRYABLE_CONNECTION_SETUP_MARKERS = (
     "failed to establish a new connection",
     "failed to create new connection",
@@ -147,6 +150,8 @@ class Twitch(object):
         "_client_version_checked_at",
         "_last_client_version_error_log",
         "subscription_notification_cache_path",
+        "_drop_claims",
+        "_drop_claim_lock",
     ]
 
     def __init__(self, username, user_agent, password=None, watch_streak_max_parallel=None):
@@ -200,6 +205,11 @@ class Twitch(object):
         self._client_version_checked_at = 0.0
         self._last_client_version_error_log = 0.0
         self.subscription_notification_cache_path = None
+        claims = load_json(Path(self.cookies_file).with_suffix(".drop-claims.json"), {})
+        self._drop_claims = {
+            key: value for key, value in claims.items() if isinstance(value, dict)
+        } if isinstance(claims, dict) else {}
+        self._drop_claim_lock = RLock()
 
     def login(self):
         if os.path.isfile(self.cookies_file):
@@ -3109,9 +3119,11 @@ class Twitch(object):
             return {}
         if not isinstance(response, dict):
             return {}
-        return ((response.get("data") or {}).get("currentUser") or {}).get(
+        inventory = ((response.get("data") or {}).get("currentUser") or {}).get(
             "inventory", {}
         ) or {}
+        self._confirm_drop_claims(inventory)
+        return inventory
 
     def __get_drops_dashboard(self, status=None):
         json_data = GQLOperations.ViewerDropsDashboard
@@ -3191,10 +3203,77 @@ class Twitch(object):
                 break
         return campaigns
 
+    def _save_drop_claims(self):
+        path = Path(self.cookies_file).with_suffix(".drop-claims.json")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(self._drop_claims), encoding="utf-8")
+            temporary.replace(path)
+        except OSError:
+            logger.warning("Could not save drop claim state; duplicate protection after restart is unavailable")
+
+    def _confirm_drop_claims(self, inventory):
+        if not isinstance(inventory, dict):
+            return
+        claimed = []
+        for campaign in inventory.get("dropCampaignsInProgress") or []:
+            for drop in campaign.get("timeBasedDrops") or []:
+                progress = drop.get("self") or {}
+                if progress.get("isClaimed") is True:
+                    claimed.append((progress.get("dropInstanceID"), drop.get("id")))
+        with self._drop_claim_lock:
+            for instance_id, entry in self._drop_claims.items():
+                if entry.get("state") != "pending":
+                    continue
+                if not any(
+                    current_instance == instance_id
+                    or (not current_instance and drop_id and drop_id == entry.get("drop_id"))
+                    for current_instance, drop_id in claimed
+                ):
+                    continue
+                # Persist before logging so another sync/restart cannot announce it again.
+                entry["state"] = "claimed"
+                self._save_drop_claims()
+                logger.info(
+                    "Claimed %s (confirmed by Twitch inventory)",
+                    (entry.get("details") or {}).get("drop_name", "drop"),
+                    extra={
+                        "emoji": ":package:",
+                        "event": Events.DROP_CLAIM,
+                        "discord_details": dict(entry.get("details") or {}),
+                    },
+                )
+
     def claim_drop(self, drop):
         if not getattr(drop, "drop_instance_id", None):
             logger.warning("Cannot claim %s because Twitch did not provide a dropInstanceID", drop)
             return False
+        with self._drop_claim_lock:
+            return self._claim_drop(drop)
+
+    def _claim_drop(self, drop):
+        instance_id = drop.drop_instance_id
+        previous = self._drop_claims.get(instance_id, {})
+        if previous.get("state") == "claimed":
+            return True
+        now = time.time()
+        if now - previous.get("attempted_at", 0) < DROP_CLAIM_RETRY_SECONDS:
+            logger.debug("Deferring drop claim retry for %s until the cooldown expires", drop)
+            return False
+
+        entry = {
+            "state": previous.get("state", "retry"),
+            "attempted_at": now,
+            "drop_id": getattr(drop, "id", None),
+            "details": {
+                "drop_name": getattr(drop, "name", None),
+                "reward": getattr(drop, "benefit", None),
+                "minutes_required": getattr(drop, "minutes_required", None),
+            },
+        }
+        self._drop_claims[instance_id] = entry
+        self._save_drop_claims()
 
         logger.info(
             f"Claim {drop}", extra={"emoji": ":package:"}
@@ -3216,20 +3295,24 @@ class Twitch(object):
             logger.warning("Drop claim response did not include a status for %s", drop)
         else:
             logger.debug("Drop claim response for %s returned status %s", drop, status)
-        if status == "ELIGIBLE_FOR_ALL":
-            logger.info(
-                "Claimed %s", drop,
-                extra={
-                    "emoji": ":package:",
-                    "event": Events.DROP_CLAIM,
-                    "discord_details": {
-                        "drop_name": getattr(drop, "name", None),
-                        "reward": getattr(drop, "benefit", None),
-                        "minutes_required": getattr(drop, "minutes_required", None),
-                    },
-                },
-            )
-        return status in ["ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"]
+        if status == "DROP_INSTANCE_ALREADY_CLAIMED":
+            entry["state"] = "claimed"
+            self._save_drop_claims()
+            return True
+        if status != "ELIGIBLE_FOR_ALL":
+            return False
+
+        entry["state"] = "pending"
+        self._save_drop_claims()
+        self.__get_inventory()
+        if entry["state"] == "claimed":
+            return True
+        logger.warning(
+            "Drop claim accepted for %s, but Twitch inventory has not confirmed it; "
+            "no success notification sent. Will retry in %d minutes",
+            drop, DROP_CLAIM_RETRY_SECONDS // 60,
+        )
+        return False
 
     def claim_all_drops_from_inventory(self):
         inventory = self.__get_inventory()

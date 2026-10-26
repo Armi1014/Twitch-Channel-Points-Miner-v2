@@ -1,4 +1,5 @@
 import json
+import tempfile
 import time
 import unittest
 from types import SimpleNamespace
@@ -25,6 +26,10 @@ class DropsPlaybackTest(unittest.TestCase):
     def setUp(self):
         Settings.logger = SimpleNamespace(less=False)
         self.twitch = Twitch("drops-playback-test", "ua")
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        self.twitch.cookies_file = cache.name + "/cookies.pkl"
+        self.twitch._drop_claims = {}
 
     def _streamer(
         self,
