@@ -359,6 +359,19 @@ Common runtime notes:
 - For debug logs, set `LoggerSettings` to `logging.DEBUG` and inspect the newest file under `logs/`.
 - If drops stop progressing, first check whether Twitch is accepting playback and whether recent GQL hashes are still valid.
 
+### View a background miner's live log
+
+From the repository directory, open a separate terminal and run:
+
+```sh
+python scripts/watch_logs.py logs/YOUR_USERNAME.log
+```
+
+The viewer shows recent INFO messages, warnings, and errors, then follows new
+records. Add `--debug` to include DEBUG records. It follows log rotation and miner
+restarts. Closing the viewer leaves the background miner running; the viewer does
+not start a second miner or send notifications.
+
 ## Links
 
 - [Latest Releases](https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2/releases)
