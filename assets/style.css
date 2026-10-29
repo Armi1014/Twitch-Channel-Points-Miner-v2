@@ -8,10 +8,81 @@ a {
     text-decoration: none;
 }
 
+.miner-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.25rem 2rem;
+    margin: 2rem 0;
+    padding: 0.5rem 0 0.5rem 1.5rem;
+    border-left: 4px solid #9146ff;
+    text-align: left;
+    font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.miner-heading {
+    flex: 1 1 24rem;
+}
+
+.miner-heading h1 {
+    margin: 0.3rem 0 0.6rem;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: clamp(1.35rem, 3.5vw, 2rem);
+    font-weight: 700;
+    line-height: 1.25;
+    letter-spacing: -0.04em;
+}
+
+.miner-eyebrow,
+.miner-requirement,
+.miner-credits {
+    font-size: 0.8rem;
+}
+
+.miner-eyebrow {
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.miner-links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.75rem 1rem;
+}
+
+.miner-header a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+.miner-header a:hover {
+    text-decoration-thickness: 2px;
+}
+
+.miner-header a:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 4px;
+}
+
+.miner-credits {
+    flex-basis: 100%;
+}
+
+@media (max-width: 768px) {
+    .miner-header {
+        margin: 1.25rem 0.75rem;
+        padding-left: 1rem;
+    }
+}
+
 .tabs ul {
     -webkit-flex-direction: column;
     flex-direction: column;
-    flex-grow: 0px;
+    flex-grow: 0;
 }
 
 .tabs {
@@ -32,15 +103,6 @@ a {
 
 ::-webkit-scrollbar-track {
     background-color: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-    background-color: #d6dee1;
-}
-
-::-webkit-scrollbar-thumb {
-    background-color: #d6dee1;
-    border-radius: 20px;
 }
 
 ::-webkit-scrollbar-thumb {

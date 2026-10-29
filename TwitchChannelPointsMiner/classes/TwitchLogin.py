@@ -72,7 +72,7 @@ class TwitchLogin(object):
         self.shared_cookies = []
 
     def login_flow(self):
-        logger.info("You'll have to login to Twitch!")
+        logger.info("Sign in to Twitch using an activation code")
         response = self.send_oauth_request(
             "https://id.twitch.tv/oauth2/device",
             {

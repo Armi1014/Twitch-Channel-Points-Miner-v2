@@ -1,6 +1,6 @@
 name: Feature request
-description: Suggest an idea for this project
-labels: enhancement
+description: Suggest an improvement to Twitch Channel Points Miner
+labels: [enhancement]
 
 body:
   - type: textarea
@@ -15,7 +15,7 @@ body:
       label: Proposed solution
       description: |
         Suggest your feature here. What benefit would it bring?
-        
+
         Do you have any ideas on how to implement it?
     validations:
       required: true

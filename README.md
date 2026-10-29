@@ -1,6 +1,6 @@
-# Twitch Channel Points Miner (Armi1014 Fork)
+# Twitch Channel Points Miner
 
-A reliability-first fork of `Twitch-Channel-Points-Miner-v2` focused on practical day-to-day use: faster startup, clearer priority behavior, stronger watch streak handling, drops resilience, reports, and cleaner subscription notifications.
+Armi1014's fork of `Twitch-Channel-Points-Miner-v2`, with reliable watch streak tracking, channel priorities, drop claiming, reports, and formatted notifications.
 
 This project is not affiliated with Twitch. Use it at your own risk and make sure you understand the platform rules before using automation tools.
 
@@ -11,7 +11,7 @@ This project is not affiliated with Twitch. Use it at your own risk and make sur
 - `uv` recommended for setup
 - `pip`/venv fallback supported through `requirements.txt`
 
-## Quick Start
+## Quick start
 
 ```sh
 git clone https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2
@@ -21,11 +21,11 @@ uv sync
 uv run run.py
 ```
 
-Edit `run.py` before the first real run. Most users only need to set `USERNAME`, `PASSWORD`, and `STREAMERS`.
+Edit `run.py` before the first run. Set `USERNAME` and `STREAMERS`, or enable followed channels with `FOLLOWERS_ENABLED = True`. Leave `PASSWORD = None`: the first login uses a Twitch activation code, and later runs reuse the saved session.
 
-Hermes is the default websocket backend. To force the legacy PubSub transport, set `USE_HERMES = False` in `run.py`.
+Hermes is the default WebSocket backend. To force the legacy PubSub transport, set `USE_HERMES = False` in `run.py`.
 
-## Pip Fallback
+## Pip fallback
 
 ```sh
 python -m venv .venv
@@ -37,10 +37,10 @@ python run.py
 
 On Windows, activate the venv with `.venv\Scripts\activate`.
 
-## First Config Checklist
+## Configuration checklist
 
 - Set your Twitch account in `USERNAME`.
-- Use `PASSWORD = None` if you want the miner to ask at startup instead of storing the password in `run.py`.
+- Leave `PASSWORD = None` and follow the activation instructions on the first login.
 - Add channels to `STREAMERS`.
 - Mark important channels with `StreamerSettings(favorite=True)` if `Priority.FAVORITE` is in your priority order.
 - Drops are enabled by default through `claim_drops=True`.
@@ -59,7 +59,7 @@ does not reconfigure an existing miner. Several providers can be enabled togethe
 
 `NOTIFICATION_EVENTS` controls which messages are sent. The example selects
 streamer-online, your-account subscription, and drop-claim events. Remove entries
-or add others such as `Events.STREAMER_OFFLINE`, `Events.BET_WIN`, and
+or add others such as `Events.STREAMER_OFFLINE`, `Events.BET_PLACED`, and
 `Events.CHAT_MENTION`. A provider can use its own `events=[...]` list instead.
 An empty list sends no events. Notifications remain disabled until you uncomment
 a provider block.
@@ -72,8 +72,24 @@ Set `message_format="plain"` in `Discord(...)` to restore text-only messages.
 Discord emojis work independently of the console's `emoji` setting. Mentions are
 disabled, and long text is shortened to fit Discord's message limits.
 
+| Event | Discord card | Sent when |
+|---|---|---|
+| `DROP_CLAIM` | 🎁 Drop claimed | Twitch inventory confirms a new claim |
+| `SUBSCRIPTION` | 🎉 Subscription | Your account subscribes, renews, receives a gift subscription, or upgrades |
+| `BET_PLACED` | 🎯 Prediction placed | Twitch confirms your bet, with the channel, prediction, outcome, and stake |
+| `BET_WIN` | ✅ Prediction won | Your bet wins |
+| `BET_LOSE` | ❌ Prediction lost | Your bet loses |
+| `BET_REFUND` | ↩️ Prediction refunded | Your stake is returned |
+| `BET_FAILED` | ⚠️ Prediction failed | A bet attempt fails |
+
+Use the `Events.` prefix in Python, for example `Events.BET_PLACED`.
+`BET_START` is a scheduling notice; it does not confirm that a bet was placed.
+
 Drop notifications are sent only after Twitch confirms a new successful claim.
 Already-claimed drops and unsuccessful attempts do not produce a claim card.
+An accepted claim without inventory confirmation stays pending and is retried
+at most once every 15 minutes. Claim state survives restarts in
+`cookies/<account>.drop-claims.json`, preventing repeated success notifications.
 The event selection still controls what is sent; ordinary point gains and
 stream-online messages are not added automatically.
 
@@ -94,10 +110,10 @@ Keep real tokens, webhook URLs, passwords, and your configured `run.py` private.
 Restart the miner after changing its configuration. If a notification does not
 arrive, check the selected event, credentials, destination permissions, and miner
 logs. Matrix startup also reports unsuccessful login. Subscription notices are
-about your own Twitch account; see [Subscription Notifications](#subscription-notifications)
-for the IRC and websocket paths.
+about your own Twitch account; see [Subscription notifications](#subscription-notifications)
+for the IRC and WebSocket paths.
 
-## Docker And Docker Compose
+## Docker and Docker Compose
 
 Use Docker with the Compose v2 plugin. Run these commands from this repository
 on the Docker host; Python does not need to be installed on that host. Compose
@@ -144,7 +160,7 @@ which also supports Portainer deployments. Its persistent paths are:
 | Host path | Container path | Access |
 |---|---|---|
 | `run.py` | `/usr/src/app/run.py` | Read-only configuration |
-| `cookies/` | `/usr/src/app/cookies/` | Read/write saved login |
+| `cookies/` | `/usr/src/app/cookies/` | Read/write saved login and drop claim state |
 | `logs/` | `/usr/src/app/logs/` | Read/write logs, reports, and `logs/.state/` |
 
 By default the host paths are beside the Compose file. Set `MINER_DATA_DIR` to
@@ -213,20 +229,20 @@ stack deployment does not support those steps. See [Portainer's known issue](htt
 The same image and Compose configuration can be checked first with the CLI
 before deploying through Portainer.
 
-## What This Fork Improves
+## What this fork improves
 
 - Faster startup on medium and large channel lists.
-- More resilient Twitch API, GQL, and websocket handling.
+- More resilient Twitch API, GQL, and WebSocket handling.
 - Better watch streak behavior for already-online channels and delayed Twitch signals.
 - Predictable favorite priority behavior.
 - Drops inventory claiming and campaign matching that keep working through flaky Twitch campaign discovery.
 - Cleaner Excel reports with daily, weekly, monthly, and yearly folders.
 - Hidden local state files under `logs/.state/` so the root `logs/` folder stays cleaner.
-- Self-only subscription notifications for Discord and other webhook-style integrations.
+- Notifications for your own subscriptions, confirmed bets, prediction results, and confirmed drop claims.
 
-For implementation history and deeper notes, see [FORK_FEATURES.md](FORK_FEATURES.md).
+For feature details, see [FORK_FEATURES.md](FORK_FEATURES.md).
 
-## Watch Streaks
+## Watch streaks
 
 The miner now treats Twitch watch streaks conservatively:
 
@@ -240,7 +256,7 @@ limited to two per broadcast, with a cooldown between attempts.
 
 More streak details are in [FAQ.md](FAQ.md).
 
-## Weekly Rewards And Streak Recovery
+## Weekly rewards and streak recovery
 
 Weekly visits and missed-stream recovery are enabled by default, adapted from
 [mpforce1's fork](https://github.com/mpforce1/Twitch-Channel-Points-Miner).
@@ -282,14 +298,14 @@ This fork keeps drops claiming running when `claim_drops=True`, treats common Tw
 
 The current drops-related Twitch GQL hashes are checked against live Twitch behavior and compared with [mpforce's working implementation](https://github.com/mpforce1/Twitch-Channel-Points-Miner). Twitch can still return transient `service timeout` or backend errors; those are Twitch-side and the miner should continue running.
 
-## Subscription Notifications
+## Subscription notifications
 
 This fork can send `Events.SUBSCRIPTION` notifications to Discord or other webhook-style integrations.
 
 It listens for:
 
 - Twitch IRC `USERNOTICE` events.
-- Twitch websocket gift-sub signals that can arrive even when the account is not present in chat.
+- Twitch WebSocket gift-sub signals that can arrive even when the account is not present in chat.
 
 It alerts only for subscription events about your own account:
 
@@ -306,7 +322,7 @@ Notes:
 - `chat=ChatPresence.NEVER` disables only the IRC subscription path for that channel.
 - Websocket gift-sub notices use the same `Events.SUBSCRIPTION` message format and are locally deduped.
 
-## Reports And State Files
+## Reports and state files
 
 Reports are written under `logs/reports/` by period:
 
@@ -322,6 +338,9 @@ Local state files are kept in `logs/.state/`, including:
 - watch streak cache
 - daily points baselines
 - subscription notification dedupe data
+
+Drop claim confirmation and duplicate protection are stored separately in
+`cookies/<account>.drop-claims.json`, alongside the saved login session.
 
 On first startup after updating, legacy state files from `logs/` are copied into `logs/.state/` automatically. The old files are left in place as backups.
 
@@ -348,3 +367,9 @@ Common runtime notes:
 - [Fork Features](FORK_FEATURES.md)
 - [Contributing](CONTRIBUTING.md)
 - [License](LICENSE)
+
+## Credits
+
+This fork builds on the work of [Tkd-Alex](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2),
+[rdavydov](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2), and
+[mpforce1](https://github.com/mpforce1/Twitch-Channel-Points-Miner).

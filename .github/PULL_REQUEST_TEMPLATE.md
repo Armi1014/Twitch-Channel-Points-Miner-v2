@@ -1,26 +1,21 @@
-# Description
+## Summary
 
-Please include a summary of the change and which issue is fixed. Please also include relevant motivation and context. List any dependencies that are required for this change.
+Describe the problem and the resulting behavior. Link the related issue, if any.
 
-Fixes # (issue)
+## Validation
 
-## Type of change
+List the relevant checks and their results, or explain how a documentation or
+wording change was reviewed.
 
-Please delete options that are not relevant.
+## Compatibility
 
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality not to work as expected)
+Describe any configuration, dependency, or migration changes. Write "None" if
+there are no compatibility changes.
 
-# How Has This Been Tested?
+## Checklist
 
-Please describe the tests that you ran to verify your changes. Provide instructions so we can reproduce. Please also list any relevant details for your test configuration.
-
-# Checklist:
-
-- [ ] My code follows the style guidelines of this project
-- [ ] I have performed a self-review of my code
-- [ ] I have commented on my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation (README.md)
-- [ ] My changes generate no new warnings
-- [ ] Any dependent changes have been updated in requirements.txt
+- [ ] The change is focused and follows the existing project style.
+- [ ] User-facing text and documentation are in English.
+- [ ] Relevant behavior has been verified.
+- [ ] Documentation and examples match any changed behavior.
+- [ ] No credentials, cookies, logs, or private configuration are included.

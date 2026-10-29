@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "Twitch-Channel-Points-Miner-v2"
 version = "2.2.0"
-description = "A simple script that will watch a stream for you and earn the channel points."
+description = "Twitch Channel Points Miner with watch streak tracking, drop claiming, reports, and notifications."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "GPLv3+" }
@@ -45,6 +45,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2"
 Repository = "https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2"
+Documentation = "https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2#readme"
+Issues = "https://github.com/Armi1014/Twitch-Channel-Points-Miner-v2/issues"
 
 [tool.setuptools]
 include-package-data = true

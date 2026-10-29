@@ -51,7 +51,7 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
             message,
             "\n".join(
                 [
-                    "**Received Subgift**",
+                    "**Gift subscription received**",
                     "",
                     "**Channel:** `streamer` (`184.88k points`)",
                     "**Recipient:** **LuckyViewer**",
@@ -83,7 +83,7 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
             message,
             "\n".join(
                 [
-                    "**Subscription Renewed**",
+                    "**Subscription renewed**",
                     "",
                     "**Channel:** `resubchannel` (`1.2k points`)",
                     "**Subscriber:** **ReturningViewer**",
@@ -109,7 +109,7 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
 
         info_log.assert_called_once()
         args, kwargs = info_log.call_args
-        self.assertIn("**New Subscription**", args[0])
+        self.assertIn("**New subscription**", args[0])
         self.assertEqual(kwargs["extra"]["emoji"], ":partying_face:")
         self.assertEqual(kwargs["extra"]["event"], Events.SUBSCRIPTION)
 
@@ -190,14 +190,14 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
             self.assertTrue(
                 should_emit_subscription_notification(
                     cache_path,
-                    "**Received Subgift**\n\n**Channel:** `streamer` (`1.00k points`)",
+                    "**Gift subscription received**\n\n**Channel:** `streamer` (`1.00k points`)",
                     dedupe_key=dedupe_key,
                 )
             )
             self.assertFalse(
                 should_emit_subscription_notification(
                     cache_path,
-                    "**Received Subgift**\n\n**Channel:** `streamer` (`1.10k points`)",
+                    "**Gift subscription received**\n\n**Channel:** `streamer` (`1.10k points`)",
                     dedupe_key=dedupe_key,
                 )
             )
@@ -305,7 +305,7 @@ class ChatSubscriptionNotificationsTest(unittest.TestCase):
                 args[0],
                 "\n".join(
                     [
-                        "**Received Subgift**",
+                        "**Gift subscription received**",
                         "",
                         "**Channel:** `streamer` (`184.88k points`)",
                         "**Recipient:** **LuckyViewer**",

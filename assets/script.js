@@ -23,7 +23,7 @@ var options = {
         size: 0,
     },
     title: {
-        text: 'Channel points (dates are displayed in UTC)',
+        text: 'Channel points (local time)',
         align: 'left'
     },
     colors: ["#f9826c"],

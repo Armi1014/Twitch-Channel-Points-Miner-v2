@@ -38,7 +38,7 @@ Streamer("name", settings=StreamerSettings(points_limit=150000))
 When a channel is already at or above its limit, the miner skips it and moves to the next eligible channel.
 Pending watch streaks still bypass the limit so streak rewards are not missed.
 
-## Startup And Streaks
+## Startup and streaks
 
 ### What happens to streamers already online at startup?
 
@@ -72,7 +72,7 @@ Usually one of these:
 - There is no claimed streak session yet
 - The channel currently has no active streak progress
 
-## Export And Reporting
+## Export and reporting
 
 ### Where is the Excel export written?
 

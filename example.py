@@ -4,14 +4,13 @@ Copy this file to `run.py` and edit the values below.
 
 Most users only need to change:
 - `USERNAME`
-- `PASSWORD`
 - `STREAMERS`
 - `FOLLOWERS_ENABLED`
 - optionally `PRIORITY_ORDER`
 
 This example is intentionally biased toward a safe first run:
 - optional notifications stay disabled
-- `PASSWORD = None` prompts at startup instead of storing it in the file
+- `PASSWORD = None` uses Twitch's activation-code login and a saved session
 - fork-specific streak and export settings are still shown, but kept grouped
 """
 
@@ -38,7 +37,7 @@ from TwitchChannelPointsMiner.logger import ColorPalette, LoggerSettings
 # 1. Account
 # ---------------------------------------------------------------------------
 USERNAME = "your-twitch-username"
-PASSWORD = None  # None = prompt at startup instead of storing your password here
+PASSWORD = None  # Leave unset; the first login uses a Twitch activation code
 
 # ---------------------------------------------------------------------------
 # 2. What the miner should watch
@@ -140,6 +139,11 @@ NOTIFICATION_EVENTS = [
     Events.STREAMER_ONLINE,
     Events.SUBSCRIPTION,
     Events.DROP_CLAIM,
+    # Events.BET_PLACED,  # Twitch-confirmed bets, including the outcome and stake
+    # Events.BET_WIN,
+    # Events.BET_LOSE,
+    # Events.BET_REFUND,
+    # Events.BET_FAILED,
 ]
 
 LOGGER_SETTINGS = LoggerSettings(

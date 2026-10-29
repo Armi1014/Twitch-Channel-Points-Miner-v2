@@ -47,7 +47,7 @@ def build_subscription_message(
 ) -> str | None:
     if msg_id == "sub":
         return build_detail_message(
-            "New Subscription",
+            "New subscription",
             [
                 f"**Channel:** `{channel}` (`{points_label}`)",
                 f"**Subscriber:** **{subscriber}**",
@@ -62,10 +62,10 @@ def build_subscription_message(
         ]
         if months:
             details.append(f"**Months:** `{months}`")
-        return build_detail_message("Subscription Renewed", details)
+        return build_detail_message("Subscription renewed", details)
     if msg_id in ["subgift", "anonsubgift"]:
         return build_detail_message(
-            "Received Subgift",
+            "Gift subscription received",
             [
                 f"**Channel:** `{channel}` (`{points_label}`)",
                 f"**Recipient:** **{recipient}**",
@@ -75,7 +75,7 @@ def build_subscription_message(
         )
     if msg_id in ["giftpaidupgrade", "anongiftpaidupgrade"]:
         return build_detail_message(
-            "Gift Subscription Upgraded",
+            "Gift subscription upgraded",
             [
                 f"**Channel:** `{channel}` (`{points_label}`)",
                 f"**Subscriber:** **{subscriber}**",
@@ -83,7 +83,7 @@ def build_subscription_message(
         )
     if msg_id == "primepaidupgrade":
         return build_detail_message(
-            "Prime Subscription Upgraded",
+            "Prime subscription upgraded",
             [
                 f"**Channel:** `{channel}` (`{points_label}`)",
                 f"**Subscriber:** **{subscriber}**",

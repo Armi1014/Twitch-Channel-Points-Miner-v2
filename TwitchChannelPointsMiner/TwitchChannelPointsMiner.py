@@ -201,7 +201,7 @@ class TwitchChannelPointsMiner:
         # Fixes TypeError: 'NoneType' object is not subscriptable
         if not username or username == "your-twitch-username":
             logger.error("Please edit your runner file (usually run.py) and try again.")
-            logger.error("No username, exiting...")
+            logger.error("Twitch username is missing; set it in run.py")
             sys.exit(0)
 
         # This disables certificate verification and allows the connection to proceed, but also makes it vulnerable to man-in-the-middle (MITM) attacks.
@@ -359,11 +359,11 @@ class TwitchChannelPointsMiner:
 
         if github_version == "0.0.0":
             logger.error(
-                "Unable to detect if you have the latest version of this script"
+                "Unable to check for miner updates"
             )
         elif current_version != github_version:
-            logger.info(f"You are running version {current_version} of this script")
-            logger.info(f"The latest version on GitHub is {github_version}")
+            logger.info(f"Installed miner version: {current_version}")
+            logger.info(f"Latest miner version: {github_version}")
 
         for sign in [signal.SIGINT, signal.SIGSEGV, signal.SIGTERM]:
             signal.signal(sign, self.end)
@@ -1218,7 +1218,7 @@ class TwitchChannelPointsMiner:
         streamers_input = list(streamers) if streamers is not None else []
         blacklist_input = list(blacklist) if blacklist is not None else []
 
-        logger.info(f"Start session: '{self.session_id}'", extra={"emoji": ":bomb:"})
+        logger.info(f"Session started: {self.session_id}", extra={"emoji": ":bomb:"})
         self.running = self.twitch.running = True
         self.start_datetime = datetime.now()
 
@@ -1535,7 +1535,7 @@ class TwitchChannelPointsMiner:
         if not self.running:
             return
 
-        logger.info("CTRL+C Detected! Please wait just a moment!")
+        logger.info("Shutdown requested; waiting for background tasks to finish")
 
         for streamer in self.streamers:
             if (
@@ -1587,14 +1587,14 @@ class TwitchChannelPointsMiner:
     def __print_report(self):
         print("\n")
         logger.info(
-            f"Ending session: '{self.session_id}'", extra={"emoji": ":stop_sign:"}
+            f"Session ended: {self.session_id}", extra={"emoji": ":stop_sign:"}
         )
         if self.logs_file is not None:
             logger.info(
-                f"Logs file: {self.logs_file}", extra={"emoji": ":page_facing_up:"}
+                f"Log file: {self.logs_file}", extra={"emoji": ":page_facing_up:"}
             )
         logger.info(
-            f"Duration {datetime.now() - self.start_datetime}",
+            f"Session duration: {datetime.now() - self.start_datetime}",
             extra={"emoji": ":hourglass:"},
         )
 

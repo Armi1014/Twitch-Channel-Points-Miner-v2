@@ -1,6 +1,6 @@
 name: Bug report
-description: Create a report to help us improve
-labels: bug
+description: Report a problem with Twitch Channel Points Miner
+labels: [bug]
 
 body:
   - type: textarea
@@ -16,10 +16,10 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Go to '...'
-        2. Click on '....'
-        3. Scroll down to '....'
-        4. See error
+        1. Configure the relevant settings in run.py.
+        2. Start the miner.
+        3. Describe the event that triggers the problem.
+        4. Include the relevant log excerpt.
     validations:
       required: true
   - type: textarea
@@ -33,21 +33,21 @@ body:
     id: operating-system
     attributes:
       label: Operating system
-      placeholder: Windows 11 Version 21H2 (OS Build 22000.1574)
+      placeholder: Windows 11, Ubuntu, or Docker host and architecture
     validations:
       required: true
   - type: input
     id: python-version
     attributes:
       label: Python version
-      placeholder: "3.11.1"
+      placeholder: "3.12 (or the Docker image tag)"
     validations:
       required: true
   - type: input
     id: miner-version
     attributes:
       label: Miner version
-      placeholder: "1.7.7"
+      placeholder: "2.2.0 or the commit SHA"
     validations:
       required: true
   - type: textarea
@@ -62,14 +62,17 @@ body:
         How to provide a DEBUG log:
         1. Set this in your runner script (`run.py`):
         ```py
-        logger_settings=LoggerSettings(
+        LOGGER_SETTINGS = LoggerSettings(
           save=True,
           console_level=logging.INFO,
           file_level=logging.DEBUG,
           less=True,
+        )
         ```
-        2. Start the miner, wait for the error, then stop the miner and post the contents of the log file (`logs\username.log`) to https://gist.github.com/ and post a link here.
-        3. Create another gist with your console output, just in case. Paste a link here as well.
+        Pass LOGGER_SETTINGS as logger_settings when constructing the miner.
+        2. Reproduce the problem and include the relevant excerpt from `logs/<username>.log`.
+        3. Remove tokens, webhook URLs, cookies, and private account details before sharing.
+        You can paste a sanitized excerpt here or link a GitHub Gist: https://gist.github.com/.
     validations:
       required: true
   - type: textarea
