@@ -319,6 +319,13 @@ Drops depend on two things:
 
 This fork keeps drops claiming running when `claim_drops=True`, treats common Twitch campaign discovery failures as non-fatal, and uses fallback campaign matching when highlighted campaign IDs are missing.
 
+Two simultaneous streak attempts can temporarily take both watch slots. Set
+`WATCH_STREAK_MAX_PARALLEL = 1` in `run.py` to leave a slot for your regular
+channel priorities. When a channel with active Drops returns to the watch
+selection, the miner refreshes HLS playback if enabled and attempts to send
+its watch event even if playback setup fails. Check Twitch's Drops Inventory
+for credited progress.
+
 The current drops-related Twitch GQL hashes are checked against live Twitch behavior and compared with [mpforce's working implementation](https://github.com/mpforce1/Twitch-Channel-Points-Miner). Twitch can still return transient `service timeout` or backend errors; those are Twitch-side and the miner should continue running.
 
 ## Subscription notifications

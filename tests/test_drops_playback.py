@@ -3,8 +3,11 @@ import tempfile
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import call, patch
 
+from requests.exceptions import ConnectionError, ReadTimeout
+
+from TwitchChannelPointsMiner.WatchStreakCache import WatchStreakCache
 from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
@@ -156,26 +159,121 @@ class DropsPlaybackTest(unittest.TestCase):
         streamer.stream.spade_url = "https://spade.example/minute"
         streamer.stream.payload = [{"event": "minute-watched"}]
         streamer.stream.campaigns_ids = ["campaign-id"]
-        self.twitch.running = True
 
         def stop_loop(*_args, **_kwargs):
             self.twitch.running = False
 
-        with (
-            patch.object(Twitch, "_refresh_selection_context"),
-            patch.object(Twitch, "_select_streamers_to_watch", return_value=[0]),
-            patch.object(Twitch, "_prime_stream_playback", return_value=False),
-            patch.object(
-                Twitch,
-                "_request_with_retry",
-                return_value=FakeResponse(status_code=204),
-            ) as mocked_request,
-            patch.object(Twitch, "_Twitch__chuncked_sleep", side_effect=stop_loop),
-        ):
-            self.twitch.send_minute_watched_events([streamer], [Priority.ORDER])
+        for failure in (None, ReadTimeout, ConnectionError):
+            with (
+                self.subTest(failure=failure),
+                patch.object(Twitch, "_refresh_selection_context"),
+                patch.object(Twitch, "_select_streamers_to_watch", return_value=[0]),
+                patch.object(
+                    Twitch, "_prime_stream_playback", return_value=False, side_effect=failure
+                ),
+                patch.object(
+                    Twitch,
+                    "_request_with_retry",
+                    return_value=FakeResponse(status_code=204),
+                ) as mocked_request,
+                patch.object(Twitch, "_Twitch__chuncked_sleep", side_effect=stop_loop),
+            ):
+                self.twitch.running = True
+                self.twitch.send_minute_watched_events([streamer], [Priority.ORDER])
+                mocked_request.assert_called_once()
+                self.assertEqual(
+                    mocked_request.call_args.args[:2], ("POST", streamer.stream.spade_url)
+                )
 
-        mocked_request.assert_called_once()
-        self.assertEqual(mocked_request.call_args.args[:2], ("POST", streamer.stream.spade_url))
+    def test_drops_refresh_playback_and_send_watch_event_after_two_streaks(self):
+        favorite = self._streamer(playback_simulation=PlaybackSimulationMode.ALWAYS)
+        favorite.settings.favorite = True
+        favorite.is_online = True
+        favorite.stream.campaigns_ids = ["campaign"]
+        streaks = [
+            Streamer(name, settings=StreamerSettings(watch_streak=True))
+            for name in ("streak-a", "streak-b")
+        ]
+        streamers = [favorite, *streaks]
+        started = time.time() - 60
+        cache = WatchStreakCache(default_account_name=self.twitch.account_username)
+        cache.mark_bootstrap_done()
+        self.twitch.watch_streak_cache = cache
+
+        for streamer in streamers:
+            streamer.online_at = started
+            streamer.stream.broadcast_id = streamer.username
+            streamer.stream.spade_url = "https://spade.example/minute"
+            streamer.stream.payload = [{"event": "minute-watched"}]
+        for streamer in streaks:
+            cache.ensure_session(streamer.username, streamer.stream.broadcast_id, started)
+
+        selections = []
+        posts = []
+        slots_left = 0
+
+        def record_selection(event, **details):
+            nonlocal slots_left
+            if event == "watch_selection":
+                selection = [channel["channel"] for channel in details["channels"]]
+                selections.append(selection)
+                posts.append([])
+                slots_left = max(1, len(selection))
+
+        def send_watch_event(method, url, *, request_name, **kwargs):
+            posts[-1].append(request_name)
+            return FakeResponse(status_code=204)
+
+        def advance_cycle(*args, **kwargs):
+            nonlocal slots_left
+            slots_left -= 1
+            if slots_left:
+                return
+            if len(selections) == 1:
+                for streamer in streaks:
+                    streamer.is_online = True
+            elif len(selections) == 2:
+                for streamer in streaks:
+                    cache.mark_claimed(streamer.username, streamer.stream.broadcast_id)
+            elif len(selections) == 4:
+                self.twitch.running = False
+
+        def prime_playback(streamer, *, force_refresh):
+            if len(selections) == 3 and streamer is favorite:
+                raise ReadTimeout
+            return True
+
+        with (
+            patch.object(Twitch, "_dashboard_event", side_effect=record_selection),
+            patch.object(Twitch, "_prime_stream_playback", side_effect=prime_playback) as prime,
+            patch.object(Twitch, "_request_with_retry", side_effect=send_watch_event),
+            patch.object(Twitch, "_Twitch__chuncked_sleep", side_effect=advance_cycle),
+        ):
+            self.twitch.running = True
+            self.twitch.send_minute_watched_events(
+                streamers, [Priority.STREAK, Priority.FAVORITE, Priority.DROPS, Priority.ORDER]
+            )
+
+        self.assertEqual(
+            selections,
+            [
+                [favorite.username],
+                ["streak-a", "streak-b"],
+                [favorite.username, "streak-a"],
+                [favorite.username, "streak-a"],
+            ],
+        )
+        self.assertEqual(
+            posts, [[f"minute_watched:{name}" for name in row] for row in selections]
+        )
+        self.assertEqual(
+            [request for request in prime.call_args_list if request.args[0] is favorite],
+            [
+                call(favorite, force_refresh=True),
+                call(favorite, force_refresh=True),
+                call(favorite, force_refresh=False),
+            ],
+        )
 
     def test_non_drop_stream_skips_spade_when_hls_prime_fails(self):
         streamer = self._streamer(
@@ -288,6 +386,26 @@ class DropsPlaybackTest(unittest.TestCase):
         mocked_fetch.assert_called_once_with(streamer)
         self.assertEqual(token, refreshed_token)
         self.assertIsNone(streamer.stream.hls_url)
+
+    def test_failed_forced_refresh_does_not_reuse_the_previous_playback_session(self):
+        streamer = self._streamer(playback_simulation=PlaybackSimulationMode.ALWAYS)
+        streamer.stream.playback_access_token = {
+            "signature": "old-signature",
+            "value": "old-token",
+            "expires_at": time.time() + 3600,
+        }
+        streamer.stream.hls_url = "https://video.example/old.m3u8"
+        fresh = {"signature": "new-signature", "value": "new-token"}
+
+        with patch.object(
+            Twitch, "_fetch_playback_access_token", side_effect=[None, fresh]
+        ) as fetch:
+            self.assertIsNone(
+                self.twitch._get_or_update_playback_access_token(streamer, force_refresh=True)
+            )
+            self.assertIsNone(streamer.stream.hls_url)
+            self.assertEqual(self.twitch._get_or_update_playback_access_token(streamer), fresh)
+        self.assertEqual(fetch.call_args_list, [call(streamer), call(streamer)])
 
     def test_forced_playback_refresh_bypasses_cached_token_and_playlist(self):
         streamer = self._streamer(playback_simulation=PlaybackSimulationMode.ALWAYS)

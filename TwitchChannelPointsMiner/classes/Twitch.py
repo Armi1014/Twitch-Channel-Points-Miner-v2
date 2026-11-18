@@ -1127,12 +1127,14 @@ class Twitch(object):
         ):
             return cached_token
 
+        # A failed refresh must not leave the previous playback session reusable.
+        stream.playback_access_token = None
+        stream.hls_url = None
         playback_token = self._fetch_playback_access_token(streamer)
         if playback_token is None:
             return None
 
         stream.playback_access_token = playback_token
-        stream.hls_url = None
         expires_at = playback_token.get("expires_at")
         logger.debug(
             "Obtained PlaybackAccessToken for %s%s",
@@ -2670,6 +2672,7 @@ class Twitch(object):
         return active_selection[: self.max_streak_sessions]
 
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
+        previous_watch_selection: set[str] = set()
         while self.running:
             try:
                 streamers_index = [
@@ -2696,6 +2699,9 @@ class Twitch(object):
                 streamers_watching = self._select_streamers_to_watch(
                     streamers, streamers_index, priority
                 )
+                watch_selection = {streamers[i].username for i in streamers_watching}
+                newly_selected = watch_selection - previous_watch_selection
+                previous_watch_selection = watch_selection
                 self._dashboard_event("watch_selection", channels=[
                     {"channel": streamers[i].username,
                      "reason": "Streak slot" if streamers[i].username in self._last_streak_selection
@@ -2706,51 +2712,54 @@ class Twitch(object):
                 drops_logging_enabled = Priority.DROPS in priority
 
                 for index in streamers_watching:
-                    # next_iteration = time.time() + 60 / len(streamers_watching)
+                    streamer = streamers[index]
                     next_iteration = time.time() + 20 / len(streamers_watching)
 
                     try:
-                        skip_minute_watched = False
-                        should_prime_playback = self._should_prime_stream_playback(
-                            streamers[index]
-                        )
-                        playback_prime_failed = (
-                            should_prime_playback
-                            and self._prime_stream_playback(
-                                streamers[index],
-                                force_refresh=self._streamer_has_active_streak_attempt(
-                                    streamers[index]
-                                ),
-                            ) is False
-                        )
-                        if playback_prime_failed:
-                            if not self._streamer_has_active_drops(streamers[index]):
-                                skip_minute_watched = True
-                            else:
+                        send_minute_watched = True
+                        if self._should_prime_stream_playback(streamer):
+                            has_active_drops = self._streamer_has_active_drops(streamer)
+                            force_refresh = self._streamer_has_active_streak_attempt(
+                                streamer
+                            ) or (has_active_drops and streamer.username in newly_selected)
+                            failure = ""
+                            try:
+                                playback_ready = self._prime_stream_playback(
+                                    streamer, force_refresh=force_refresh
+                                )
+                            except requests.exceptions.RequestException as error:
+                                if not has_active_drops:
+                                    raise
+                                playback_ready = False
+                                failure = f" ({type(error).__name__})"
+                            if not playback_ready and has_active_drops:
                                 self._log_watch_issue(
-                                    streamers[index].username,
+                                    streamer.username,
                                     "drop_playback_prime_failed",
-                                    "Playback prime failed for %s, sending Drops minute-watched event anyway",
-                                    streamers[index].username,
+                                    "Playback prime failed for %s%s, sending Drops minute-watched event anyway",
+                                    streamer.username,
+                                    failure,
                                     level=logging.DEBUG,
                                 )
+                            send_minute_watched = playback_ready or has_active_drops
 
-                        if not skip_minute_watched:
+                        if send_minute_watched:
                             response = self._request_with_retry(
                                 "POST",
-                                streamers[index].stream.spade_url,
-                                request_name=f"minute_watched:{streamers[index].username}",
-                                data=streamers[index].stream.encode_payload(),
+                                streamer.stream.spade_url,
+                                request_name=f"minute_watched:{streamer.username}",
+                                data=streamer.stream.encode_payload(),
                                 headers={"User-Agent": self.user_agent},
-                                # timeout=60,
                                 timeout=20,
                             )
                             logger.debug(
-                                f"Send minute watched request for {streamers[index]} - Status code: {response.status_code}"
+                                "Send minute watched request for %s - Status code: %s",
+                                streamer,
+                                response.status_code,
                             )
                             if response.status_code == 204:
-                                streamers[index].stream.update_minute_watched()
-                                self._dashboard_event("watch_request", channel=streamers[index].username)
+                                streamer.stream.update_minute_watched()
+                                self._dashboard_event("watch_request", channel=streamer.username)
 
                                 """
                                 Remember, you can only earn progress towards a time-based Drop on one participating channel at a time.  [ ! ! ! ]
@@ -2758,25 +2767,25 @@ class Twitch(object):
                                 For time-based Drops, if you are unable to claim the Drop in time, you will be able to claim it from the inventory page until the Drops campaign ends.
                                 """
 
-                                for campaign in streamers[index].stream.campaigns:
+                                for campaign in streamer.stream.campaigns:
                                     for drop in campaign.drops:
-                                        self._log_drop_progress(streamers[index], drop, drops_logging_enabled)
+                                        self._log_drop_progress(streamer, drop, drops_logging_enabled)
 
                     except requests.exceptions.ConnectionError as e:
                         self._log_watch_issue(
-                            streamers[index].username,
+                            streamer.username,
                             "send_minute_watched_connection_error",
                             "Error while trying to send minute watched for %s: %s",
-                            streamers[index].username,
+                            streamer.username,
                             type(e).__name__,
                         )
                         self.__check_connection_handler(chunk_size)
                     except requests.exceptions.Timeout as e:
                         self._log_watch_issue(
-                            streamers[index].username,
+                            streamer.username,
                             "send_minute_watched_timeout",
                             "Timeout while trying to send minute watched for %s: %s",
-                            streamers[index].username,
+                            streamer.username,
                             type(e).__name__,
                         )
 
